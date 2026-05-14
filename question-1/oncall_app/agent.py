@@ -6,7 +6,6 @@ from oncall_app.html_parser import parse_html_document
 from oncall_app.models import AgentResponse, Document, ToolCall
 from oncall_app.repository import DocumentRepository
 
-
 P0_FILES = (
     "sop-001.html",
     "sop-002.html",

@@ -1,13 +1,23 @@
 """Search services for SOP documents."""
 
-from oncall_app.models import Document, SearchResult
+from typing import TypedDict
 
+from oncall_app.models import Document, SearchResult
 
 DEFAULT_LIMIT = 10
 SNIPPET_RADIUS = 48
 
 
-SEMANTIC_RULES = (
+class SemanticRule(TypedDict):
+    """A deterministic semantic expansion rule."""
+
+    triggers: tuple[str, ...]
+    required_any: tuple[str, ...]
+    boosts: dict[str, float]
+    terms: tuple[str, ...]
+
+
+SEMANTIC_RULES: tuple[SemanticRule, ...] = (
     {
         "triggers": ("服务器挂了", "服务挂了", "宕机", "不可用", "服务异常"),
         "required_any": ("服务器", "服务", "挂", "宕机", "不可用"),
@@ -83,13 +93,11 @@ def keyword_search(
     return sorted(results, key=lambda result: (-result.score, result.doc_id))[:limit]
 
 
-def _rule_matches(rule: dict[str, object], query: str) -> bool:
+def _rule_matches(rule: SemanticRule, query: str) -> bool:
     """Return whether a semantic rule applies to a query."""
     folded_query = _casefold(query)
-    triggers = tuple(rule["triggers"])
-    required_any = tuple(rule["required_any"])
-    return any(_casefold(term) in folded_query for term in triggers) or any(
-        _casefold(term) in folded_query for term in required_any
+    return any(_casefold(term) in folded_query for term in rule["triggers"]) or any(
+        _casefold(term) in folded_query for term in rule["required_any"]
     )
 
 
@@ -100,8 +108,8 @@ def _semantic_terms_and_boosts(query: str) -> tuple[list[str], dict[str, float]]
     for rule in SEMANTIC_RULES:
         if not _rule_matches(rule, query):
             continue
-        terms.extend(tuple(rule["terms"]))
-        for doc_id, boost in dict(rule["boosts"]).items():
+        terms.extend(rule["terms"])
+        for doc_id, boost in rule["boosts"].items():
             boosts[doc_id] = boosts.get(doc_id, 0.0) + float(boost)
     return terms, boosts
 

@@ -1,11 +1,10 @@
 """Tests for keyword SOP search."""
 
-from pathlib import Path
 import unittest
+from pathlib import Path
 
 from oncall_app.repository import DocumentRepository
 from oncall_app.search import keyword_search
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = PROJECT_ROOT / "data"

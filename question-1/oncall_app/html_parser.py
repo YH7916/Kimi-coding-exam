@@ -1,11 +1,10 @@
 """HTML parsing utilities for SOP documents."""
 
+import re
 from html import unescape
 from html.parser import HTMLParser
-import re
 
 from oncall_app.models import Document
-
 
 BLOCK_TAGS = {
     "address",
