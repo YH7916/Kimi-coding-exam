@@ -2,6 +2,8 @@
 
 from fastapi import APIRouter, Response
 
+from oncall_app.api.static_files import read_frontend_shell
+
 router = APIRouter()
 
 
@@ -16,5 +18,4 @@ def health() -> dict[str, str]:
 @router.get("/v3", response_class=Response)
 def frontend_page() -> Response:
     """Serve the frontend shell for each README page route."""
-    html = "<!doctype html><html><body><div id='app'></div></body></html>"
-    return Response(html, media_type="text/html")
+    return Response(read_frontend_shell(), media_type="text/html")
