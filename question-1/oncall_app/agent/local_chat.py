@@ -76,15 +76,29 @@ def _tool_call_response(fnames: list[str]) -> JsonObject:
 
 def _answer_response(messages: list[JsonObject]) -> JsonObject:
     """Return a final local answer from tool observations."""
+    user_message = _last_user_message(messages)
     tool_text = "\n".join(
         str(message.get("content") or "")
         for message in messages
         if message.get("role") == "tool"
     )
-    if "OutOfMemoryError" in tool_text or "OOM" in tool_text:
+    if "P0" in user_message or "响应流程" in user_message:
+        content = "P0 故障要先确认影响范围，五分钟内升级并拉起协同，按 SOP 分工处理和复盘。"
+    elif (
+        "入侵" in user_message
+        or "黑客" in user_message
+        or "攻击" in user_message
+        or "安全" in user_message
+    ):
+        content = "安全事件先确认影响范围并隔离受感染资产，保留日志证据后升级安全负责人。"
+    elif "推荐" in user_message or "模型" in user_message or "算法" in user_message:
+        content = "推荐结果质量下降时先检查模型推理、特征数据和近期发布，再回滚或降级。"
+    elif "OutOfMemoryError" in tool_text or "OOM" in tool_text:
         content = "服务 OOM 时需要保存堆转储文件，检查 JVM 内存曲线，必要时扩容或回滚。"
     elif "主从" in tool_text:
         content = "数据库主从延迟时先检查复制线程状态和错误信息，修复后验证数据一致性。"
+    elif "推荐" in tool_text or "模型" in tool_text:
+        content = "推荐结果质量下降时先检查模型推理、特征数据和近期发布，再回滚或降级。"
     elif "安全" in tool_text or "入侵" in tool_text:
         content = "安全事件先确认影响范围并隔离受感染资产，保留日志证据后升级安全负责人。"
     else:

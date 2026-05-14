@@ -1,8 +1,17 @@
 """Tokenization for Chinese and mixed technical SOP text."""
 
 import re
+import warnings
 
-import jieba
+with warnings.catch_warnings():
+    warnings.filterwarnings(
+        "ignore",
+        message="pkg_resources is deprecated as an API",
+        category=UserWarning,
+    )
+    import jieba
+
+jieba.setLogLevel(60)
 
 TECH_TOKEN_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9+_.-]*|[0-9]+|&")
 CHINESE_CHAR_PATTERN = re.compile(r"[\u4e00-\u9fff]")

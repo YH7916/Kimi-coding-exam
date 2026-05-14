@@ -10,6 +10,7 @@ from oncall_app.retrieval.bm25 import BM25Index
 from oncall_app.retrieval.chunking import DocumentChunk, build_chunks
 from oncall_app.retrieval.embeddings import EmbeddingCache
 from oncall_app.retrieval.hybrid import rrf_fuse
+from oncall_app.retrieval.semantic_fallback import semantic_fallback_search
 from oncall_app.retrieval.tokenize import tokenize
 from oncall_app.retrieval.vector_store import VectorHit, VectorStore
 
@@ -103,7 +104,7 @@ class RetrievalService:
         if not normalized_query:
             return []
         if self._embedding_client is None or self._vector_store is None:
-            return self.keyword_search(normalized_query, limit=limit)
+            return semantic_fallback_search(self.documents, normalized_query, limit=limit)
 
         candidate_limit = max(limit * SEMANTIC_CANDIDATE_MULTIPLIER, limit)
         lexical_results = self.keyword_search(normalized_query, limit=candidate_limit)
