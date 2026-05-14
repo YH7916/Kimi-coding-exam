@@ -6,7 +6,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from oncall_app.pages import render_search_page
 from oncall_app.repository import DocumentRepository
-from oncall_app.search import keyword_search
+from oncall_app.search import keyword_search, semantic_search
 
 
 @dataclass(frozen=True)
@@ -38,6 +38,8 @@ class Router:  # pylint: disable=too-few-public-methods
             return self._create_document(body)
         if method == "GET" and path == "/v2":
             return self._html(render_search_page("v2", "/v2/search", "Phase 2 语义搜索"))
+        if method == "GET" and path == "/v2/search":
+            return self._json(self._search_payload(self._query_value(query), semantic_search))
         return self._json({"error": "not found"}, status=404)
 
     @staticmethod

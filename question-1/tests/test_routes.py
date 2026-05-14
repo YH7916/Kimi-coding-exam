@@ -68,6 +68,16 @@ class RouteTest(unittest.TestCase):
         self.assertEqual(post_payload, {"id": "sop-test", "title": "测试 SOP"})
         self.assertIn("sop-test", [result["id"] for result in search_payload["results"]])
 
+    def test_v2_search_uses_semantic_results(self):
+        """GET /v2/search returns semantic search results."""
+        response = self.router.handle("GET", "/v2/search?q=黑客攻击", b"")
+
+        payload = json.loads(response.body)
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(payload["query"], "黑客攻击")
+        self.assertEqual(payload["results"][0]["id"], "sop-005")
+
     def test_unknown_route_returns_404(self):
         """Unknown paths return a JSON 404."""
         response = self.router.handle("GET", "/missing", b"")
