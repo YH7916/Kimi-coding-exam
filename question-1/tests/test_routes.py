@@ -78,6 +78,26 @@ class RouteTest(unittest.TestCase):
         self.assertEqual(payload["query"], "黑客攻击")
         self.assertEqual(payload["results"][0]["id"], "sop-005")
 
+    def test_v3_page_renders_chat_interface(self):
+        """GET /v3 returns a simple chat page."""
+        response = self.router.handle("GET", "/v3", b"")
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(response.content_type, "text/html; charset=utf-8")
+        self.assertIn("/v3/chat", response.body)
+
+    def test_v3_chat_returns_answer_and_tool_calls(self):
+        """POST /v3/chat returns the answer and readFile trace."""
+        body = json.dumps({"message": "服务 OOM 了怎么办？"}).encode("utf-8")
+
+        response = self.router.handle("POST", "/v3/chat", body)
+        payload = json.loads(response.body)
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(payload["tool_calls"][0]["tool"], "readFile")
+        self.assertEqual(payload["tool_calls"][0]["fname"], "sop-001.html")
+        self.assertIn("OutOfMemoryError", payload["answer"])
+
     def test_unknown_route_returns_404(self):
         """Unknown paths return a JSON 404."""
         response = self.router.handle("GET", "/missing", b"")

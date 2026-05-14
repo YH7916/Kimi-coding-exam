@@ -4,7 +4,8 @@ from dataclasses import dataclass
 import json
 from urllib.parse import parse_qs, urlsplit
 
-from oncall_app.pages import render_search_page
+from oncall_app.agent import OnCallAgent
+from oncall_app.pages import render_chat_page, render_search_page
 from oncall_app.repository import DocumentRepository
 from oncall_app.search import keyword_search, semantic_search
 
@@ -23,24 +24,30 @@ class Router:  # pylint: disable=too-few-public-methods
 
     def __init__(self, repository: DocumentRepository):
         self.repository = repository
+        self.agent = OnCallAgent(repository)
 
     def handle(self, method: str, target: str, body: bytes = b"") -> RouteResponse:
         """Handle one HTTP request."""
         parsed = urlsplit(target)
         path = parsed.path.rstrip("/") or "/"
         query = parse_qs(parsed.query, keep_blank_values=True)
+        response = self._json({"error": "not found"}, status=404)
 
         if method == "GET" and path == "/v1":
-            return self._html(render_search_page("v1", "/v1/search", "Phase 1 关键词搜索"))
-        if method == "GET" and path == "/v1/search":
-            return self._json(self._search_payload(self._query_value(query), keyword_search))
-        if method == "POST" and path == "/v1/documents":
-            return self._create_document(body)
-        if method == "GET" and path == "/v2":
-            return self._html(render_search_page("v2", "/v2/search", "Phase 2 语义搜索"))
-        if method == "GET" and path == "/v2/search":
-            return self._json(self._search_payload(self._query_value(query), semantic_search))
-        return self._json({"error": "not found"}, status=404)
+            response = self._html(render_search_page("v1", "/v1/search", "Phase 1 关键词搜索"))
+        elif method == "GET" and path == "/v1/search":
+            response = self._json(self._search_payload(self._query_value(query), keyword_search))
+        elif method == "POST" and path == "/v1/documents":
+            response = self._create_document(body)
+        elif method == "GET" and path == "/v2":
+            response = self._html(render_search_page("v2", "/v2/search", "Phase 2 语义搜索"))
+        elif method == "GET" and path == "/v2/search":
+            response = self._json(self._search_payload(self._query_value(query), semantic_search))
+        elif method == "GET" and path == "/v3":
+            response = self._html(render_chat_page())
+        elif method == "POST" and path == "/v3/chat":
+            response = self._chat(body)
+        return response
 
     @staticmethod
     def _query_value(query: dict[str, list[str]]) -> str:
@@ -78,6 +85,32 @@ class Router:  # pylint: disable=too-few-public-methods
 
         document = self.repository.add_document(doc_id.strip(), html)
         return self._json({"id": document.doc_id, "title": document.title}, status=201)
+
+    def _chat(self, body: bytes) -> RouteResponse:
+        """Handle POST /v3/chat."""
+        try:
+            payload = json.loads(body.decode("utf-8"))
+            message = payload["message"]
+        except (UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError):
+            return self._json({"error": "invalid chat payload"}, status=400)
+
+        if not isinstance(message, str) or not message.strip():
+            return self._json({"error": "invalid chat payload"}, status=400)
+
+        response = self.agent.answer(message.strip())
+        return self._json(
+            {
+                "answer": response.answer,
+                "tool_calls": [
+                    {
+                        "tool": call.tool,
+                        "fname": call.fname,
+                        "result_preview": call.result_preview,
+                    }
+                    for call in response.tool_calls
+                ],
+            }
+        )
 
     @staticmethod
     def _json(payload: dict[str, object], status: int = 200) -> RouteResponse:

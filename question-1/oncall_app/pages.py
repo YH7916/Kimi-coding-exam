@@ -51,3 +51,55 @@ def render_search_page(version: str, search_path: str, heading: str) -> str:
   </script>
 </body>
 </html>"""
+
+
+def render_chat_page() -> str:
+    """Render a minimal chat page with visible tool calls."""
+    return """<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Phase 3 On-Call 助手</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 32px; line-height: 1.6; }
+    main { max-width: 880px; margin: 0 auto; }
+    textarea { width: min(760px, 90vw); height: 88px; padding: 10px; }
+    button { display: block; margin-top: 8px; padding: 8px 14px; }
+    pre { white-space: pre-wrap; background: #f6f6f6; padding: 12px; }
+    .tool { border-left: 3px solid #555; padding-left: 10px; color: #333; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Phase 3 On-Call 助手</h1>
+    <form id="chat-form">
+      <textarea name="message" placeholder="例如：服务 OOM 了怎么办？"></textarea>
+      <button type="submit">发送</button>
+    </form>
+    <section id="history"></section>
+  </main>
+  <script>
+    const form = document.querySelector("#chat-form");
+    const history = document.querySelector("#history");
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const message = new FormData(form).get("message") || "";
+      const response = await fetch("/v3/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message }),
+      });
+      const payload = await response.json();
+      const tools = payload.tool_calls.map((call) => `
+        <p class="tool">${call.tool}("${call.fname}")<br>${call.result_preview}</p>
+      `).join("");
+      history.innerHTML = `
+        <h2>工具调用</h2>${tools}
+        <h2>回答</h2><pre>${payload.answer}</pre>
+      ` + history.innerHTML;
+      form.reset();
+    });
+  </script>
+</body>
+</html>"""
