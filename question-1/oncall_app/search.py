@@ -3,6 +3,7 @@
 from typing import TypedDict
 
 from oncall_app.models import Document, SearchResult
+from oncall_app.retrieval.service import RetrievalService
 
 DEFAULT_LIMIT = 10
 SNIPPET_RADIUS = 48
@@ -69,28 +70,8 @@ def keyword_search(
     query: str,
     limit: int = DEFAULT_LIMIT,
 ) -> list[SearchResult]:
-    """Search documents by exact keyword matching with simple ranking."""
-    normalized_query = query.strip()
-    if not normalized_query:
-        return []
-
-    results: list[SearchResult] = []
-    for document in documents:
-        title_matches = _count_occurrences(document.title, normalized_query)
-        text_matches = _count_occurrences(document.text, normalized_query)
-        if not title_matches and not text_matches:
-            continue
-        score = float(title_matches * 5 + text_matches)
-        results.append(
-            SearchResult(
-                doc_id=document.doc_id,
-                title=document.title,
-                snippet=_make_snippet(document, normalized_query),
-                score=score,
-            )
-        )
-
-    return sorted(results, key=lambda result: (-result.score, result.doc_id))[:limit]
+    """Search documents by BM25 lexical retrieval."""
+    return RetrievalService.from_documents(documents).keyword_search(query, limit=limit)
 
 
 def _rule_matches(rule: SemanticRule, query: str) -> bool:
