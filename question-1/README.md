@@ -138,6 +138,13 @@ $env:ONCALL_CHAT_API_KEY="..."
 $env:ONCALL_CHAT_MODEL="..."
 ```
 
+如果使用本地 Codex/OpenAI 反代，Codex 自身配置可能写成 `base_url = "http://127.0.0.1:8080"` 且 `wire_api = "responses"`。本项目当前的 Agent 走 Chat Completions tool-calling，因此应用侧应配置到 `/v1`：
+
+```powershell
+$env:ONCALL_CHAT_BASE_URL="http://127.0.0.1:8080/v1"
+$env:ONCALL_CHAT_MODEL="gpt-5.4"
+```
+
 也可以用 `OPENAI_BASE_URL`、`OPENAI_API_KEY`、`OPENAI_MODEL` 作为 Chat Completions 的兼容变量。真实 provider smoke test 是 opt-in 的，避免无意消耗额度：
 
 ```powershell
