@@ -1,10 +1,15 @@
 """Chat Completions tool-calling On-Call assistant."""
 
 import json
+from pathlib import Path
 from typing import cast
 
+from oncall_app.agent.evidence import EvidenceExtractor
 from oncall_app.agent.prompts import READ_FILE_TOOLS, SYSTEM_PROMPT
+from oncall_app.agent.state import ToolObservation
+from oncall_app.agent.synthesizer import format_evidence_context
 from oncall_app.agent.tools import ReadFileTool
+from oncall_app.documents.parser import parse_document
 from oncall_app.documents.repository import DocumentRepository
 from oncall_app.llm.chat_client import ChatClient
 from oncall_app.llm.openai_compat import JsonObject
@@ -45,10 +50,15 @@ class OnCallAssistant:  # pylint: disable=too-few-public-methods
                     answer=str(assistant_message.get("content") or ""),
                     tool_calls=tool_calls,
                 )
+            round_observations: list[ToolObservation] = []
             for tool_call in requested_tools:
                 observation = self._execute_tool_call(tool_call)
+                round_observations.append(observation)
                 tool_calls.append(observation.call)
                 messages.append(_tool_message(tool_call, observation.content))
+            evidence_context = self._evidence_context(message, round_observations)
+            if evidence_context:
+                messages.append({"role": "system", "content": evidence_context})
 
         return AgentResponse(
             answer="工具调用轮次已达到上限，请缩小问题范围后重试。",
@@ -79,6 +89,26 @@ class OnCallAssistant:  # pylint: disable=too-few-public-methods
         arguments = json.loads(str(function.get("arguments") or "{}"))
         fname = str(arguments.get("fname", ""))
         return self.read_file_tool.read_file(fname)
+
+    @staticmethod
+    def _evidence_context(
+        message: str,
+        observations: list[ToolObservation],
+    ) -> str:
+        """Extract evidence from SOP HTML tool observations."""
+        documents = [
+            parse_document(
+                Path(observation.call.fname).stem,
+                observation.content,
+                file_name=observation.call.fname,
+            )
+            for observation in observations
+            if observation.call.fname.endswith(".html")
+        ]
+        if not documents:
+            return ""
+        evidence = EvidenceExtractor().extract(message, documents)
+        return format_evidence_context(evidence)
 
 
 def _assistant_message(response: JsonObject) -> JsonObject:
