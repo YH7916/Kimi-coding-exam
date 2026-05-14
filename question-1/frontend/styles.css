@@ -39,3 +39,26 @@ pre {
   border: 1px solid #e2e8f0;
   padding: 14px;
 }
+
+.trace-list,
+.tool-list,
+.evidence-list {
+  display: grid;
+  gap: 10px;
+  margin: 16px 0;
+}
+
+.trace-item,
+.evidence-card {
+  border-radius: 6px;
+}
+
+.trace-item strong {
+  display: inline-block;
+  margin-bottom: 6px;
+}
+
+.evidence-card h2 {
+  font-size: 16px;
+  margin: 0 0 8px;
+}

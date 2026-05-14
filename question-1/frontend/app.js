@@ -1,6 +1,15 @@
 const app = document.querySelector("#app");
 const route = window.location.pathname;
 
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
 function renderSearch(version, endpoint, title) {
   app.innerHTML = `
     <h1>${title}</h1>
@@ -18,9 +27,9 @@ function renderSearch(version, endpoint, title) {
     const payload = await response.json();
     document.querySelector("#results").innerHTML = payload.results.map((item) => `
       <article>
-        <h2>${item.title}</h2>
-        <p>${item.snippet}</p>
-        <small>${version} · ${item.id} · score=${item.score}</small>
+        <h2>${escapeHtml(item.title)}</h2>
+        <p>${escapeHtml(item.snippet)}</p>
+        <small>${version} · ${escapeHtml(item.id)} · score=${escapeHtml(item.score)}</small>
       </article>
     `).join("") || "<p>没有结果</p>";
   });
@@ -46,10 +55,33 @@ function renderChat() {
       body: JSON.stringify({ message }),
     });
     const payload = await response.json();
-    document.querySelector("#trace").innerHTML = payload.tool_calls.map((call) => `
-      <pre>${call.tool}("${call.fname}")\n${call.result_preview || ""}</pre>
-    `).join("");
-    document.querySelector("#answer").innerHTML = `<pre>${payload.answer}</pre>`;
+    const trace = payload.trace || [];
+    const evidence = payload.evidence || [];
+    const toolCalls = payload.tool_calls || [];
+    document.querySelector("#trace").innerHTML = `
+      <div class="trace-list">
+        ${trace.map((item) => `
+          <article class="trace-item">
+            <strong>${escapeHtml(item.type)}</strong>
+            <p>${escapeHtml(item.message)}</p>
+          </article>
+        `).join("")}
+      </div>
+      <div class="tool-list">
+        ${toolCalls.map((call) => `
+          <pre>${escapeHtml(call.tool)}("${escapeHtml(call.fname)}")\n${escapeHtml(call.result_preview || "")}</pre>
+        `).join("")}
+      </div>
+      <div class="evidence-list">
+        ${evidence.map((item) => `
+          <article class="evidence-card">
+            <h2>${escapeHtml(item.file)} · ${escapeHtml(item.section)}</h2>
+            <p>${escapeHtml(item.text)}</p>
+          </article>
+        `).join("")}
+      </div>
+    `;
+    document.querySelector("#answer").innerHTML = `<pre>${escapeHtml(payload.answer)}</pre>`;
   });
 }
 
