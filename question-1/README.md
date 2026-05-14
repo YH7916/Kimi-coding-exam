@@ -146,3 +146,9 @@ python -m unittest tests.integration.test_real_providers -v
 ```
 
 不要把真实 API Key 提交到仓库。
+
+## 工程说明
+
+- 架构图与设计取舍见 `docs/ARCHITECTURE.md`
+- 开发记录与面试叙事见 `docs/DEV_LOG.md`
+- 离线评测命令：`python scripts/evaluate.py`
