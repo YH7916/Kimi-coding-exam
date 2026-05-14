@@ -9,12 +9,18 @@ from oncall_app.models import Document, SearchResult
 from oncall_app.retrieval.bm25 import BM25Index
 from oncall_app.retrieval.chunking import DocumentChunk, build_chunks
 from oncall_app.retrieval.embeddings import EmbeddingCache
+from oncall_app.retrieval.hybrid import rrf_fuse
 from oncall_app.retrieval.tokenize import tokenize
 from oncall_app.retrieval.vector_store import VectorHit, VectorStore
 
 SNIPPET_RADIUS = 56
 VECTOR_HIT_MULTIPLIER = 8
 DOCUMENT_COUNT_BOOST = 0.01
+SEMANTIC_CANDIDATE_MULTIPLIER = 3
+SECTION_HEADING_BOOST = 0.005
+LEXICAL_RRF_WEIGHT = 1.0
+VECTOR_RRF_WEIGHT = 1.25
+SECTION_BOOST_STOP_TERMS = {"问题", "故障", "处理", "出问题", "怎么办", "怎么", "什么"}
 
 
 @dataclass
@@ -99,14 +105,71 @@ class RetrievalService:
         if self._embedding_client is None or self._vector_store is None:
             return self.keyword_search(normalized_query, limit=limit)
 
-        query_vector = _embed_query(
+        candidate_limit = max(limit * SEMANTIC_CANDIDATE_MULTIPLIER, limit)
+        lexical_results = self.keyword_search(normalized_query, limit=candidate_limit)
+        vector_results = self._vector_search(normalized_query, limit=candidate_limit)
+        return self._fuse_search_results(
             normalized_query,
+            lexical_results,
+            vector_results,
+            limit,
+        )
+
+    def _vector_search(self, query: str, limit: int) -> list[SearchResult]:
+        """Return vector-only semantic results."""
+        if self._embedding_client is None or self._vector_store is None:
+            return []
+        query_vector = _embed_query(
+            query,
             self._embedding_client,
             self._embedding_cache,
         )
         hit_limit = max(limit * VECTOR_HIT_MULTIPLIER, limit)
         hits = self._vector_store.rank(query_vector, limit=hit_limit)
-        return self._results_from_vector_hits(hits, normalized_query, limit)
+        return self._results_from_vector_hits(hits, query, limit)
+
+    def _fuse_search_results(
+        self,
+        query: str,
+        lexical_results: list[SearchResult],
+        vector_results: list[SearchResult],
+        limit: int,
+    ) -> list[SearchResult]:
+        """Fuse lexical and vector results into final semantic results."""
+        fused = rrf_fuse(
+            [
+                [result.doc_id for result in lexical_results],
+                [result.doc_id for result in vector_results],
+            ],
+            weights=[LEXICAL_RRF_WEIGHT, VECTOR_RRF_WEIGHT],
+        )
+        result_by_id = {
+            result.doc_id: result for result in [*vector_results, *lexical_results]
+        }
+        query_terms = _query_terms(query)
+        ranked = sorted(
+            fused,
+            key=lambda item: (
+                -(
+                    item.score
+                    + _section_heading_bonus(self._documents_by_id[item.doc_id], query_terms)
+                ),
+                item.doc_id,
+            ),
+        )
+        return [
+            SearchResult(
+                doc_id=item.doc_id,
+                title=result_by_id[item.doc_id].title,
+                snippet=result_by_id[item.doc_id].snippet,
+                score=round(
+                    item.score
+                    + _section_heading_bonus(self._documents_by_id[item.doc_id], query_terms),
+                    4,
+                ),
+            )
+            for item in ranked[:limit]
+        ]
 
     def _results_from_vector_hits(
         self,
@@ -189,6 +252,17 @@ def _lexical_bonus(document: Document, query_terms: set[str]) -> float:
         if term and term in folded_text
     )
     return min(occurrences, 20) * 0.001
+
+
+def _section_heading_bonus(document: Document, query_terms: set[str]) -> float:
+    """Return a small boost when query terms appear in section headings."""
+    useful_terms = query_terms - SECTION_BOOST_STOP_TERMS
+    bonus = 0.0
+    for section in document.sections:
+        folded_heading = section.heading.casefold()
+        if any(term in folded_heading for term in useful_terms):
+            bonus += SECTION_HEADING_BOOST
+    return min(bonus, SECTION_HEADING_BOOST * 3)
 
 
 def _embed_query(
