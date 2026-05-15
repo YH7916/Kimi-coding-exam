@@ -50,6 +50,8 @@ class FrontendStaticTest(unittest.TestCase):
         self.assertIn('renderMode === "content"', js)
         self.assertIn("JSON.stringify({ message, history })", js)
         self.assertIn("renderMarkdown", js)
+        self.assertIn("renderMarkdownTable", js)
+        self.assertIn("collectMarkdownTable", js)
         self.assertIn("markdown-body", js)
         self.assertIn("renderChatShell", js)
         self.assertIn("chat-screen", js)
@@ -66,6 +68,16 @@ class FrontendStaticTest(unittest.TestCase):
         self.assertIn(".evidence-strip", css)
         self.assertIn("grid-template-columns: repeat(3, minmax(0, 1fr));", css)
         self.assertIn("-webkit-line-clamp: 2;", css)
+
+    def test_markdown_styles_support_readable_hierarchy(self):
+        """Markdown output has GitHub-like hierarchy and rich block support."""
+        css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+        self.assertIn(".markdown-body h2", css)
+        self.assertIn("border-bottom: 1px solid var(--line-soft);", css)
+        self.assertIn(".markdown-body blockquote", css)
+        self.assertIn(".markdown-body table", css)
+        self.assertIn(".markdown-body strong", css)
 
 
 if __name__ == "__main__":
