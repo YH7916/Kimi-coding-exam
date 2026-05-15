@@ -17,6 +17,8 @@ class FrontendStaticTest(unittest.TestCase):
         """The frontend lives outside backend route modules."""
         for name in ("index.html", "app.js", "styles.css"):
             self.assertTrue((PROJECT_ROOT / "frontend" / name).is_file())
+        for name in ("api.js", "config.js", "format.js", "markdown.js", "sse.js", "storage.js"):
+            self.assertTrue((PROJECT_ROOT / "frontend" / "app" / name).is_file())
         self.assertTrue((PROJECT_ROOT / "frontend" / "assets" / "settings-2.svg").is_file())
 
     def test_pages_use_static_frontend_shell(self):
@@ -26,14 +28,14 @@ class FrontendStaticTest(unittest.TestCase):
         response = client.get("/v3")
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn('<script src="/static/app.js"', response.text)
+        self.assertIn('<script type="module" src="/static/app.js"', response.text)
         self.assertIn('<link rel="stylesheet" href="/static/styles.css"', response.text)
         self.assertIn('/static/assets/settings-2.svg', response.text)
         self.assertIn('id="settings-button"', response.text)
 
     def test_static_js_calls_readme_api_routes(self):
         """Frontend JavaScript calls the README API routes."""
-        js = (PROJECT_ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+        js = self._frontend_js()
 
         self.assertIn("/v1/search", js)
         self.assertIn("/v2/search", js)
@@ -80,6 +82,13 @@ class FrontendStaticTest(unittest.TestCase):
         self.assertIn(".markdown-body blockquote", css)
         self.assertIn(".markdown-body table", css)
         self.assertIn(".markdown-body strong", css)
+
+    @staticmethod
+    def _frontend_js() -> str:
+        """Return the concatenated static frontend modules."""
+        paths = [PROJECT_ROOT / "frontend" / "app.js"]
+        paths.extend(sorted((PROJECT_ROOT / "frontend" / "app").glob("*.js")))
+        return "\n".join(path.read_text(encoding="utf-8") for path in paths)
 
 
 if __name__ == "__main__":

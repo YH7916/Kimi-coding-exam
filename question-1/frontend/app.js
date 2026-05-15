@@ -1,50 +1,26 @@
+import {
+  fetchDocumentDetail,
+  fetchProviderStatus,
+  fetchSearchResults,
+  streamChat,
+} from "./app/api.js";
+import { MAX_HISTORY_ENTRIES, MODES, modeFromPath } from "./app/config.js";
+import { scoreLabel, sectionKey, sopIdFromFile } from "./app/format.js";
+import { escapeHtml, renderMarkdown } from "./app/markdown.js";
+import {
+  compactHistoryTitle,
+  createHistoryId,
+  loadHistoryEntries,
+  loadUserSettings,
+  saveHistoryEntries,
+  saveUserSettings,
+} from "./app/storage.js";
+
 const app = document.querySelector("#app");
-
-const MODES = {
-  v1: {
-    endpoint: "/v1/search",
-    kicker: "v1 Search",
-    title: "Search the SOPs",
-    subtitle: "关键词匹配，适合 OOM、CDN、P0 这类明确线索。",
-    placeholder: "OOM / CDN / P0",
-    resultTitle: "Keyword matches",
-  },
-  v2: {
-    endpoint: "/v2/search",
-    kicker: "v2 RAG",
-    title: "Ask for evidence",
-    subtitle: "语义检索相关 SOP 片段，不生成最终处置结论。",
-    placeholder: "服务器挂了，先查什么？",
-    resultTitle: "Retrieved evidence",
-  },
-  v3: {
-    endpoint: "/v3/chat",
-    streamEndpoint: "/v3/chat/stream",
-    kicker: "v3 Agent",
-    title: "Ask the agent",
-    subtitle: "读取 SOP，生成回答，并展示工具调用。",
-    placeholder: "P0 故障的响应流程是什么？",
-    resultTitle: "Agent response",
-  },
-};
-
-function modeFromPath(pathname) {
-  if (pathname === "/v1") {
-    return "v1";
-  }
-  if (pathname === "/v2") {
-    return "v2";
-  }
-  return "v3";
-}
 
 let mode = modeFromPath(window.location.pathname);
 let config = MODES[mode];
 const chatTurns = [];
-const SETTINGS_STORAGE_KEY = "oncall-copilot-settings";
-const HISTORY_STORAGE_KEY = "oncall-copilot-history";
-const MAX_HISTORY_ENTRIES = 24;
-const HISTORY_TITLE_CHARS = 48;
 const userSettings = loadUserSettings();
 let historyEntries = loadHistoryEntries();
 let activeHistoryId = null;
@@ -58,60 +34,6 @@ function isActiveChat() {
 
 function hasPendingChatTurn() {
   return chatTurns.some((turn) => turn.role === "pending" || turn.streaming);
-}
-
-function loadUserSettings() {
-  try {
-    const saved = JSON.parse(localStorage.getItem(SETTINGS_STORAGE_KEY) || "{}");
-    return {
-      showTrace: saved.showTrace !== false,
-      sectionJump: saved.sectionJump !== false,
-      historyOpen: saved.historyOpen === true,
-      settingsOpen: saved.settingsOpen === true,
-    };
-  } catch (_error) {
-    return { showTrace: true, sectionJump: true, historyOpen: false, settingsOpen: false };
-  }
-}
-
-function saveUserSettings() {
-  localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(userSettings));
-}
-
-function loadHistoryEntries() {
-  try {
-    const saved = JSON.parse(localStorage.getItem(HISTORY_STORAGE_KEY) || "[]");
-    if (!Array.isArray(saved)) {
-      return [];
-    }
-    return saved
-      .filter((entry) => MODES[entry?.mode] && entry.id && entry.title)
-      .slice(0, MAX_HISTORY_ENTRIES);
-  } catch (_error) {
-    return [];
-  }
-}
-
-function saveHistoryEntries() {
-  localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(historyEntries));
-}
-
-function createHistoryId() {
-  if (window.crypto?.randomUUID) {
-    return window.crypto.randomUUID();
-  }
-  return `history-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
-function compactHistoryTitle(value) {
-  const normalized = String(value || "").replace(/\s+/g, " ").trim();
-  if (!normalized) {
-    return "Untitled";
-  }
-  if (normalized.length <= HISTORY_TITLE_CHARS) {
-    return normalized;
-  }
-  return `${normalized.slice(0, HISTORY_TITLE_CHARS - 1)}...`;
 }
 
 function recordSearchHistory(query) {
@@ -136,7 +58,7 @@ function recordSearchHistory(query) {
     0,
     MAX_HISTORY_ENTRIES,
   );
-  saveHistoryEntries();
+  saveHistoryEntries(historyEntries);
 }
 
 function serializeChatTurns() {
@@ -174,7 +96,7 @@ function persistCurrentChatHistory() {
     0,
     MAX_HISTORY_ENTRIES,
   );
-  saveHistoryEntries();
+  saveHistoryEntries(historyEntries);
 }
 
 function restoreChatTurns(turns) {
@@ -194,239 +116,9 @@ function restoreChatTurns(turns) {
   );
 }
 
-function escapeHtml(value) {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
-}
-
-function renderInlineMarkdown(value) {
-  const codeSpans = [];
-  let rendered = escapeHtml(value).replace(/`([^`]+)`/g, (_match, code) => {
-    const placeholder = `%%CODESPAN${codeSpans.length}%%`;
-    codeSpans.push(`<code>${code}</code>`);
-    return placeholder;
-  });
-
-  rendered = rendered
-    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>')
-    .replace(/(\*\*|__)(.+?)\1/g, "<strong>$2</strong>")
-    .replace(/~~(.+?)~~/g, "<del>$1</del>")
-    .replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>")
-    .replace(/(^|[^_])_([^_\n]+)_/g, "$1<em>$2</em>");
-
-  codeSpans.forEach((code, index) => {
-    rendered = rendered.replaceAll(`%%CODESPAN${index}%%`, code);
-  });
-  return rendered;
-}
-
-function renderMarkdown(value) {
-  const lines = String(value || "").replace(/\r\n?/g, "\n").split("\n");
-  const html = [];
-  let paragraph = [];
-  let listType = "";
-  let pendingListBreak = false;
-  let inCodeBlock = false;
-  let codeLines = [];
-
-  const closeParagraph = () => {
-    if (!paragraph.length) {
-      return;
-    }
-    html.push(`<p>${paragraph.join("<br>")}</p>`);
-    paragraph = [];
-  };
-
-  const closeList = () => {
-    if (!listType) {
-      return;
-    }
-    html.push(`</${listType}>`);
-    listType = "";
-    pendingListBreak = false;
-  };
-
-  const openList = (nextListType) => {
-    closeParagraph();
-    if (listType === nextListType) {
-      pendingListBreak = false;
-      return;
-    }
-    closeList();
-    listType = nextListType;
-    pendingListBreak = false;
-    html.push(`<${listType}>`);
-  };
-
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index];
-    const trimmed = line.trim();
-    if (trimmed.startsWith("```")) {
-      if (inCodeBlock) {
-        html.push(`<pre><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
-        codeLines = [];
-        inCodeBlock = false;
-      } else {
-        closeParagraph();
-        closeList();
-        inCodeBlock = true;
-      }
-      continue;
-    }
-
-    if (inCodeBlock) {
-      codeLines.push(line);
-      continue;
-    }
-
-    if (!trimmed) {
-      closeParagraph();
-      if (listType) {
-        pendingListBreak = true;
-      }
-      continue;
-    }
-
-    if (pendingListBreak && !isListItem(trimmed)) {
-      closeList();
-    }
-
-    if (/^([-*_])(?:\s*\1){2,}$/.test(trimmed)) {
-      closeParagraph();
-      closeList();
-      html.push("<hr>");
-      continue;
-    }
-
-    if (looksLikeTableStart(lines, index)) {
-      closeParagraph();
-      closeList();
-      const table = collectMarkdownTable(lines, index);
-      html.push(renderMarkdownTable(table.headers, table.rows));
-      index = table.nextIndex - 1;
-      continue;
-    }
-
-    const heading = trimmed.match(/^(#{1,6})\s+(.+?)\s*#*$/);
-    if (heading) {
-      closeParagraph();
-      closeList();
-      const level = Math.min(heading[1].length + 1, 6);
-      html.push(`<h${level}>${renderInlineMarkdown(heading[2])}</h${level}>`);
-      continue;
-    }
-
-    const quote = trimmed.match(/^>\s?(.+)$/);
-    if (quote) {
-      closeParagraph();
-      closeList();
-      html.push(`<blockquote><p>${renderInlineMarkdown(quote[1])}</p></blockquote>`);
-      continue;
-    }
-
-    const unordered = trimmed.match(/^[-*]\s+(.+)$/);
-    if (unordered) {
-      openList("ul");
-      html.push(`<li>${renderInlineMarkdown(unordered[1])}</li>`);
-      continue;
-    }
-
-    const ordered = trimmed.match(/^\d+[.)]\s+(.+)$/);
-    if (ordered) {
-      openList("ol");
-      html.push(`<li>${renderInlineMarkdown(ordered[1])}</li>`);
-      continue;
-    }
-
-    closeList();
-    paragraph.push(renderInlineMarkdown(trimmed));
-  }
-
-  if (inCodeBlock) {
-    html.push(`<pre><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
-  }
-  closeParagraph();
-  closeList();
-  return html.join("");
-}
-
-function isListItem(trimmedLine) {
-  return /^[-*]\s+(.+)$/.test(trimmedLine) || /^\d+[.)]\s+(.+)$/.test(trimmedLine);
-}
-
-function splitMarkdownTableRow(line) {
-  let row = line.trim();
-  if (row.startsWith("|")) {
-    row = row.slice(1);
-  }
-  if (row.endsWith("|")) {
-    row = row.slice(0, -1);
-  }
-  return row.split("|").map((cell) => cell.trim());
-}
-
-function isMarkdownTableSeparator(line) {
-  const cells = splitMarkdownTableRow(line);
-  return cells.length > 1 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
-}
-
-function looksLikeTableStart(lines, index) {
-  const current = lines[index] || "";
-  const next = lines[index + 1] || "";
-  return current.includes("|") && isMarkdownTableSeparator(next);
-}
-
-function collectMarkdownTable(lines, startIndex) {
-  const headers = splitMarkdownTableRow(lines[startIndex]);
-  const rows = [];
-  let index = startIndex + 2;
-  while (index < lines.length && lines[index].includes("|") && lines[index].trim()) {
-    rows.push(splitMarkdownTableRow(lines[index]));
-    index += 1;
-  }
-  return { headers, rows, nextIndex: index };
-}
-
-function renderMarkdownTable(headers, rows) {
-  const headerHtml = headers
-    .map((header) => `<th>${renderInlineMarkdown(header)}</th>`)
-    .join("");
-  const bodyHtml = rows
-    .map((row) => `
-      <tr>
-        ${headers.map((_header, index) => `<td>${renderInlineMarkdown(row[index] || "")}</td>`).join("")}
-      </tr>
-    `)
-    .join("");
-  return `
-    <div class="markdown-table-wrap">
-      <table>
-        <thead><tr>${headerHtml}</tr></thead>
-        <tbody>${bodyHtml}</tbody>
-      </table>
-    </div>
-  `;
-}
-
-function scoreLabel(score) {
-  const numeric = Number(score);
-  if (!Number.isFinite(numeric)) {
-    return String(score);
-  }
-  return numeric.toFixed(numeric >= 10 ? 0 : 2);
-}
-
 async function refreshProviderStatus() {
   try {
-    const response = await fetch("/provider-status");
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
-    }
-    renderProviderStatus(await response.json());
+    renderProviderStatus(await fetchProviderStatus());
   } catch (_error) {
     renderProviderStatus(null);
   }
@@ -495,14 +187,6 @@ function renderCacheRow(cache) {
       <mark class="is-real">开启</mark>
     </article>
   `;
-}
-
-function sopIdFromFile(value) {
-  return String(value || "").replace(/\.html$/i, "");
-}
-
-function sectionKey(value) {
-  return String(value || "").trim().replace(/\s+/g, " ").toLowerCase();
 }
 
 function setActiveNav() {
@@ -595,7 +279,7 @@ function setupHistoryButton() {
   }
   button.addEventListener("click", () => {
     userSettings.historyOpen = !userSettings.historyOpen;
-    saveUserSettings();
+    saveUserSettings(userSettings);
     applyHistorySidebarState();
   });
   syncHistoryButtonState();
@@ -617,7 +301,7 @@ function setupHistorySidebar() {
       if (event.target.closest("[data-panel-dismiss]")) {
         userSettings.historyOpen = false;
         userSettings.settingsOpen = false;
-        saveUserSettings();
+        saveUserSettings(userSettings);
         applyHistorySidebarState();
         applySettingsSidebarState();
       }
@@ -639,7 +323,7 @@ function deleteHistoryEntry(id) {
   if (activeChatHistoryId === id) {
     activeChatHistoryId = null;
   }
-  saveHistoryEntries();
+  saveHistoryEntries(historyEntries);
   refreshHistorySidebar();
 }
 
@@ -718,7 +402,7 @@ function bindSettingsControls() {
 
   showTrace.addEventListener("change", () => {
     userSettings.showTrace = showTrace.checked;
-    saveUserSettings();
+    saveUserSettings(userSettings);
     if (isActiveChat()) {
       renderChatConversation();
     }
@@ -726,7 +410,7 @@ function bindSettingsControls() {
 
   sectionJump.addEventListener("change", () => {
     userSettings.sectionJump = sectionJump.checked;
-    saveUserSettings();
+    saveUserSettings(userSettings);
   });
 }
 
@@ -738,7 +422,7 @@ function setupSettingsPopover() {
 
   button.addEventListener("click", () => {
     userSettings.settingsOpen = !userSettings.settingsOpen;
-    saveUserSettings();
+    saveUserSettings(userSettings);
     applySettingsSidebarState();
   });
 
@@ -748,7 +432,7 @@ function setupSettingsPopover() {
     }
     userSettings.historyOpen = false;
     userSettings.settingsOpen = false;
-    saveUserSettings();
+    saveUserSettings(userSettings);
     applyHistorySidebarState();
     applySettingsSidebarState();
   });
@@ -983,11 +667,7 @@ function renderError(message) {
 async function submitSearch(q, options = {}) {
   renderLoading(mode === "v1" ? "Searching keywords" : "Retrieving evidence");
   try {
-    const response = await fetch(`${config.endpoint}?q=${encodeURIComponent(q)}`);
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
-    }
-    const payload = await response.json();
+    const payload = await fetchSearchResults(config.endpoint, q);
     renderSearchResults(payload.results || []);
     if (options.record !== false) {
       recordSearchHistory(q);
@@ -1053,23 +733,20 @@ async function submitChat(message) {
   chatTurns.push(assistantTurn);
   renderShell();
   try {
-    const response = await fetch(config.streamEndpoint || `${config.endpoint}/stream`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message, history }),
-    });
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
-    }
-    await readSseStream(response, (event) => {
-      const renderMode = applyChatStreamEvent(assistantTurn, event);
-      if (renderMode === "content") {
-        scheduleAssistantContentUpdate(assistantTurn);
-        return;
-      }
-      cancelAssistantContentUpdate();
-      renderChatConversation();
-    });
+    await streamChat(
+      config.streamEndpoint || `${config.endpoint}/stream`,
+      message,
+      history,
+      (event) => {
+        const renderMode = applyChatStreamEvent(assistantTurn, event);
+        if (renderMode === "content") {
+          scheduleAssistantContentUpdate(assistantTurn);
+          return;
+        }
+        cancelAssistantContentUpdate();
+        renderChatConversation();
+      },
+    );
     assistantTurn.streaming = false;
     renderShell();
   } catch (error) {
@@ -1088,77 +765,24 @@ function visibleChatHistory() {
     .map((turn) => ({ role: turn.role, content: turn.content }));
 }
 
-function removePendingTurn() {
-  for (let index = chatTurns.length - 1; index >= 0; index -= 1) {
-    if (chatTurns[index].role === "pending") {
-      chatTurns.splice(index, 1);
-      return;
-    }
-  }
-}
-
-async function readSseStream(response, onEvent) {
-  if (!response.body) {
-    throw new Error("Streaming response body is unavailable");
-  }
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) {
-      break;
-    }
-    buffer += decoder.decode(value, { stream: true });
-    const frames = buffer.split("\n\n");
-    buffer = frames.pop() || "";
-    frames.forEach((frame) => {
-      const event = parseSseFrame(frame);
-      if (event) {
-        onEvent(event);
-      }
-    });
-  }
-
-  const tail = buffer.trim();
-  if (tail) {
-    const event = parseSseFrame(tail);
-    if (event) {
-      onEvent(event);
-    }
-  }
-}
-
-function parseSseFrame(frame) {
-  let type = "message";
-  const dataLines = [];
-  frame.split("\n").forEach((line) => {
-    if (line.startsWith("event:")) {
-      type = line.slice("event:".length).trim();
-    }
-    if (line.startsWith("data:")) {
-      dataLines.push(line.slice("data:".length).trimStart());
-    }
-  });
-  if (!dataLines.length) {
-    return null;
-  }
-  return { type, data: JSON.parse(dataLines.join("\n")) };
-}
-
 function applyChatStreamEvent(turn, event) {
   const data = event.data || {};
   if (event.type === "retrieval") {
     const files = (data.candidates || []).map((item) => item.file).join(", ");
     turn.trace = [
       ...(turn.trace || []),
-      { type: "retrieval", message: files ? `v2 hybrid retrieval candidates: ${files}` : "no candidates" },
+      {
+        type: "retrieval",
+        message: files ? `v2 hybrid retrieval candidates: ${files}` : "no candidates",
+      },
     ];
     return "full";
   }
   if (event.type === "tool_call") {
-    turn.toolCalls = [...(turn.toolCalls || []), { tool: data.tool || "readFile", fname: data.fname || "" }];
+    turn.toolCalls = [
+      ...(turn.toolCalls || []),
+      { tool: data.tool || "readFile", fname: data.fname || "" },
+    ];
     turn.trace = [
       ...(turn.trace || []),
       { type: "tool_call", message: `readFile("${data.fname || ""}")` },
@@ -1500,11 +1124,7 @@ async function openSopModal(rawId, targetSection = "") {
   `);
 
   try {
-    const response = await fetch(`/documents/${encodeURIComponent(docId)}`);
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
-    }
-    const documentDetail = await response.json();
+    const documentDetail = await fetchDocumentDetail(docId);
     renderSopModal(renderSopDocument(documentDetail, targetSection));
     scrollToSopSection(targetSection);
   } catch (error) {
