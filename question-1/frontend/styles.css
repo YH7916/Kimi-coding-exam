@@ -163,6 +163,10 @@ body.chat-active main {
   padding: 24px 0 20px;
 }
 
+body.modal-open {
+  overflow: hidden;
+}
+
 .home {
   max-width: 760px;
   margin: 0 auto;
@@ -349,14 +353,39 @@ h1 {
   display: grid;
   grid-template-columns: 32px 1fr;
   gap: 14px;
+  width: 100%;
   padding: 16px 18px;
+  color: inherit;
+  text-align: left;
+  background: transparent;
+  border: 0;
   border-bottom: 1px solid var(--line-soft);
+  cursor: pointer;
   animation: item-rise 420ms var(--ease-out-quart) both;
   animation-delay: calc(var(--i, 0) * 52ms);
 }
 
 .result-row:last-child {
   border-bottom: 0;
+}
+
+.sop-open-button {
+  appearance: none;
+  font: inherit;
+}
+
+.result-row:hover,
+.result-row:focus-visible,
+.evidence-card:hover,
+.evidence-card:focus-visible {
+  background: color-mix(in srgb, var(--surface-muted) 62%, var(--surface));
+}
+
+.result-row:focus-visible,
+.evidence-card:focus-visible,
+.sop-modal-close:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--focus) 34%, transparent);
+  outline-offset: -3px;
 }
 
 .result-index {
@@ -658,6 +687,16 @@ body.chat-active .chat-message-assistant {
   animation-delay: calc(var(--i, 0) * 48ms);
 }
 
+.evidence-card {
+  width: 100%;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background 160ms var(--ease-out-quart),
+    border-color 160ms var(--ease-out-quart);
+}
+
 .trace-item span {
   display: block;
   margin-bottom: 5px;
@@ -668,6 +707,115 @@ body.chat-active .chat-message-assistant {
 
 .evidence-strip {
   margin-top: 12px;
+}
+
+.sop-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: rgba(28, 28, 27, 0.28);
+  animation: surface-in 180ms var(--ease-out-quart) both;
+}
+
+.sop-modal {
+  position: fixed;
+  z-index: 41;
+  top: 50%;
+  left: 50%;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(820px, calc(100vw - 36px));
+  max-height: min(760px, calc(100svh - 52px));
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid color-mix(in srgb, var(--line) 86%, #c8c8c6);
+  border-radius: 14px;
+  box-shadow:
+    0 24px 70px rgba(0, 0, 0, 0.2),
+    0 2px 10px rgba(0, 0, 0, 0.08);
+  transform: translate(-50%, -50%);
+  overflow: hidden;
+  animation: modal-in 220ms var(--ease-out-quart) both;
+}
+
+.sop-modal-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 34px;
+  gap: 16px;
+  align-items: start;
+  padding: 20px 22px 16px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.sop-modal-header p {
+  margin: 0 0 6px;
+  color: var(--faint);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.sop-modal-header h2 {
+  margin: 0;
+  font-size: 20px;
+  line-height: 1.35;
+}
+
+.sop-modal-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  color: var(--muted);
+  background: var(--surface-muted);
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 20px;
+  line-height: 1;
+}
+
+.sop-modal-close:hover {
+  color: var(--text);
+  background: #eeeeec;
+}
+
+.sop-modal-body {
+  overflow-y: auto;
+  padding: 8px 22px 24px;
+}
+
+.sop-modal-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 130px;
+  padding: 22px;
+  color: var(--muted);
+}
+
+.sop-full-section {
+  padding: 16px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.sop-full-section:last-child {
+  border-bottom: 0;
+}
+
+.sop-full-section h3 {
+  margin: 0 0 8px;
+  font-size: 15px;
+  line-height: 1.45;
+}
+
+.sop-full-section p,
+.sop-modal-body > p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.8;
+  white-space: pre-wrap;
 }
 
 @keyframes spin {
@@ -706,6 +854,17 @@ body.chat-active .chat-message-assistant {
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+@keyframes modal-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, calc(-50% + 10px)) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
   }
 }
 
@@ -788,5 +947,10 @@ body.chat-active .chat-message-assistant {
 
   .trace-panel {
     position: static;
+  }
+
+  .sop-modal {
+    width: calc(100vw - 24px);
+    max-height: calc(100svh - 24px);
   }
 }

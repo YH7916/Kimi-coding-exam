@@ -5,7 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from oncall_app.agent.evidence import EvidenceItem
-from oncall_app.models import AgentResponse, SearchResult, ToolCall
+from oncall_app.models import AgentResponse, Document, SearchResult, ToolCall
 
 MAX_EVIDENCE_HEADING_CHARS = 80
 MAX_EVIDENCE_TEXT_CHARS = 240
@@ -39,6 +39,24 @@ class DocumentCreated(BaseModel):
 
     id: str
     title: str
+
+
+class DocumentSectionItem(BaseModel):
+    """One structured section in a stored SOP document."""
+
+    heading: str
+    level: int
+    text: str
+
+
+class DocumentDetail(BaseModel):
+    """Full SOP document returned for source preview."""
+
+    id: str
+    file: str
+    title: str
+    text: str
+    sections: list[DocumentSectionItem]
 
 
 class ChatHistoryItem(BaseModel):
@@ -99,6 +117,24 @@ def search_response(query: str, results: list[SearchResult]) -> SearchResponse:
                 score=result.score,
             )
             for result in results
+        ],
+    )
+
+
+def document_detail(document: Document) -> DocumentDetail:
+    """Convert a parsed SOP document into a source preview response."""
+    return DocumentDetail(
+        id=document.doc_id,
+        file=document.file_name or f"{document.doc_id}.html",
+        title=document.title,
+        text=document.text,
+        sections=[
+            DocumentSectionItem(
+                heading=section.heading,
+                level=section.level,
+                text=section.text,
+            )
+            for section in document.sections
         ],
     )
 

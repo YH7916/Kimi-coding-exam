@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from fastapi import APIRouter, Query, Response, status
+from fastapi import APIRouter, HTTPException, Query, Response, status
 
 from oncall_app.agent.assistant import OnCallAssistant
 from oncall_app.agent.evidence import EvidenceExtractor, EvidenceItem
@@ -12,8 +12,10 @@ from oncall_app.api.schemas import (
     ChatResponse,
     DocumentCreate,
     DocumentCreated,
+    DocumentDetail,
     SearchResponse,
     chat_response,
+    document_detail,
     search_response,
 )
 from oncall_app.api.static_files import read_frontend_shell
@@ -140,6 +142,19 @@ def v1_documents(payload: DocumentCreate) -> DocumentCreated:
     )
     runtime.rebuild_index()
     return DocumentCreated(id=document.doc_id, title=document.title)
+
+
+@router.get("/documents/{doc_id}")
+def get_document(doc_id: str) -> DocumentDetail:
+    """Return one parsed SOP document for frontend source preview."""
+    normalized_id = doc_id.removesuffix(".html")
+    try:
+        return document_detail(runtime.repository.get(normalized_id))
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document not found",
+        ) from exc
 
 
 @router.get("/v2/search")

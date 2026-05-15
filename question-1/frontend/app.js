@@ -180,6 +180,10 @@ function scoreLabel(score) {
   return numeric.toFixed(numeric >= 10 ? 0 : 2);
 }
 
+function sopIdFromFile(value) {
+  return String(value || "").replace(/\.html$/i, "");
+}
+
 function setActiveNav() {
   const switcher = document.querySelector(".version-switcher");
   if (switcher) {
@@ -382,14 +386,14 @@ function renderSearchResults(results) {
           ? displayedResults
               .map(
                 (item, index) => `
-                  <article class="result-row" style="--i: ${index}">
+                  <button type="button" class="result-row sop-open-button" data-sop-id="${escapeHtml(item.id)}" style="--i: ${index}">
                     <span class="result-index">${index + 1}</span>
                     <div>
                       <h3>${escapeHtml(item.title)}</h3>
                       <p>${escapeHtml(item.snippet)}</p>
                       <small>${escapeHtml(item.id)} · score ${escapeHtml(scoreLabel(item.score))}</small>
                     </div>
-                  </article>
+                  </button>
                 `,
               )
               .join("")
@@ -545,16 +549,141 @@ function renderEvidence(evidence) {
   return `
     <div class="evidence-strip">
       ${evidence.slice(0, 3).map((item, index) => `
-        <article class="evidence-card" style="--i: ${index}">
+        <button type="button" class="evidence-card sop-open-button" data-sop-id="${escapeHtml(sopIdFromFile(item.file))}" style="--i: ${index}">
           <small>${escapeHtml(item.file)}</small>
           <h3>${escapeHtml(item.section)}</h3>
           <p>${escapeHtml(item.text)}</p>
-        </article>
+        </button>
       `).join("")}
     </div>
   `;
 }
 
+function setupSopPreview() {
+  app.addEventListener("click", (event) => {
+    if (!(event.target instanceof Element)) {
+      return;
+    }
+    const trigger = event.target.closest("[data-sop-id]");
+    if (!trigger) {
+      return;
+    }
+    event.preventDefault();
+    openSopModal(trigger.dataset.sopId || "");
+  });
+
+  document.addEventListener("click", (event) => {
+    if (!(event.target instanceof Element)) {
+      return;
+    }
+    if (event.target.matches("[data-modal-close]")) {
+      closeSopModal();
+    }
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      closeSopModal();
+    }
+  });
+}
+
+async function openSopModal(rawId) {
+  const docId = sopIdFromFile(rawId);
+  if (!docId) {
+    return;
+  }
+  renderSopModal(`
+    <header class="sop-modal-header">
+      <div>
+        <p>SOP preview</p>
+        <h2 id="sop-modal-title">${escapeHtml(docId)}.html</h2>
+      </div>
+      <button type="button" class="sop-modal-close" data-modal-close aria-label="Close preview">×</button>
+    </header>
+    <div class="sop-modal-status">
+      <span class="spinner" aria-hidden="true"></span>
+      <span>Loading source</span>
+    </div>
+  `);
+
+  try {
+    const response = await fetch(`/documents/${encodeURIComponent(docId)}`);
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    const documentDetail = await response.json();
+    renderSopModal(renderSopDocument(documentDetail));
+  } catch (error) {
+    renderSopModal(`
+      <header class="sop-modal-header">
+        <div>
+          <p>SOP preview</p>
+          <h2 id="sop-modal-title">Unable to open ${escapeHtml(docId)}.html</h2>
+        </div>
+        <button type="button" class="sop-modal-close" data-modal-close aria-label="Close preview">×</button>
+      </header>
+      <div class="sop-modal-body">
+        <article class="notice-card">
+          <strong>Request failed</strong>
+          <p>${escapeHtml(error.message || "Unknown error")}</p>
+        </article>
+      </div>
+    `);
+  }
+}
+
+function renderSopModal(innerHtml) {
+  let root = document.querySelector("#sop-modal-root");
+  if (!root) {
+    root = document.createElement("div");
+    root.id = "sop-modal-root";
+    document.body.append(root);
+  }
+  root.innerHTML = `
+    <div class="sop-modal-backdrop" data-modal-close></div>
+    <section class="sop-modal" role="dialog" aria-modal="true" aria-labelledby="sop-modal-title">
+      ${innerHtml}
+    </section>
+  `;
+  document.body.classList.add("modal-open");
+  root.querySelector(".sop-modal-close")?.focus();
+}
+
+function renderSopDocument(documentDetail) {
+  const sections = (documentDetail.sections || [])
+    .filter((section) => String(section.text || "").trim())
+    .map((section) => `
+      <section class="sop-full-section">
+        <h3>${escapeHtml(section.heading || documentDetail.title)}</h3>
+        <p>${escapeHtml(section.text)}</p>
+      </section>
+    `)
+    .join("");
+
+  return `
+    <header class="sop-modal-header">
+      <div>
+        <p>${escapeHtml(documentDetail.file)}</p>
+        <h2 id="sop-modal-title">${escapeHtml(documentDetail.title)}</h2>
+      </div>
+      <button type="button" class="sop-modal-close" data-modal-close aria-label="Close preview">×</button>
+    </header>
+    <div class="sop-modal-body">
+      ${sections || `<p>${escapeHtml(documentDetail.text || "")}</p>`}
+    </div>
+  `;
+}
+
+function closeSopModal() {
+  const root = document.querySelector("#sop-modal-root");
+  if (root) {
+    root.remove();
+  }
+  document.body.classList.remove("modal-open");
+}
+
 setupNavigation();
+setupSopPreview();
 setActiveNav();
 renderShell();

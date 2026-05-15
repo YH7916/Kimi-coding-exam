@@ -41,6 +41,9 @@ class FrontendStaticTest(unittest.TestCase):
         self.assertIn("markdown-body", js)
         self.assertIn("renderChatShell", js)
         self.assertIn("chat-screen", js)
+        self.assertIn("/documents/", js)
+        self.assertIn("openSopModal", js)
+        self.assertIn("data-sop-id", js)
 
 
 if __name__ == "__main__":

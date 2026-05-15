@@ -92,6 +92,31 @@ class SearchRouteTest(unittest.TestCase):
         self.assertEqual(response.status_code, 201)
         self.assertIn("sop-test", [item["id"] for item in search["results"]])
 
+    def test_get_document_returns_full_sop(self):
+        """Source preview endpoint returns parsed full SOP content."""
+        response = self.client.get("/documents/sop-001")
+        payload = response.json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["id"], "sop-001")
+        self.assertEqual(payload["file"], "sop-001.html")
+        self.assertIn("后端服务 On-Call SOP", payload["title"])
+        self.assertIn("OutOfMemoryError", payload["text"])
+        self.assertTrue(payload["sections"])
+
+    def test_get_document_accepts_html_file_name(self):
+        """Evidence cards can request documents using their file names."""
+        response = self.client.get("/documents/sop-001.html")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["id"], "sop-001")
+
+    def test_get_document_returns_404_for_missing_sop(self):
+        """Unknown document ids return 404."""
+        response = self.client.get("/documents/missing")
+
+        self.assertEqual(response.status_code, 404)
+
 
 if __name__ == "__main__":
     unittest.main()
