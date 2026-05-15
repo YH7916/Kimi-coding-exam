@@ -105,6 +105,7 @@ function renderMarkdown(value) {
   const html = [];
   let paragraph = [];
   let listType = "";
+  let pendingListBreak = false;
   let inCodeBlock = false;
   let codeLines = [];
 
@@ -122,15 +123,18 @@ function renderMarkdown(value) {
     }
     html.push(`</${listType}>`);
     listType = "";
+    pendingListBreak = false;
   };
 
   const openList = (nextListType) => {
     closeParagraph();
     if (listType === nextListType) {
+      pendingListBreak = false;
       return;
     }
     closeList();
     listType = nextListType;
+    pendingListBreak = false;
     html.push(`<${listType}>`);
   };
 
@@ -157,8 +161,14 @@ function renderMarkdown(value) {
 
     if (!trimmed) {
       closeParagraph();
-      closeList();
+      if (listType) {
+        pendingListBreak = true;
+      }
       continue;
+    }
+
+    if (pendingListBreak && !isListItem(trimmed)) {
+      closeList();
     }
 
     if (/^([-*_])(?:\s*\1){2,}$/.test(trimmed)) {
@@ -218,6 +228,10 @@ function renderMarkdown(value) {
   closeParagraph();
   closeList();
   return html.join("");
+}
+
+function isListItem(trimmedLine) {
+  return /^[-*]\s+(.+)$/.test(trimmedLine) || /^\d+[.)]\s+(.+)$/.test(trimmedLine);
 }
 
 function splitMarkdownTableRow(line) {

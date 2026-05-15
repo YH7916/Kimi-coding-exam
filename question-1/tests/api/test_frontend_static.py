@@ -52,6 +52,8 @@ class FrontendStaticTest(unittest.TestCase):
         self.assertIn("renderMarkdown", js)
         self.assertIn("renderMarkdownTable", js)
         self.assertIn("collectMarkdownTable", js)
+        self.assertIn("pendingListBreak", js)
+        self.assertIn("isListItem", js)
         self.assertIn("markdown-body", js)
         self.assertIn("renderChatShell", js)
         self.assertIn("chat-screen", js)
