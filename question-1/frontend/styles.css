@@ -651,14 +651,6 @@ body.chat-active .chat-message {
   border-radius: 0;
 }
 
-.chat-message small {
-  display: block;
-  margin-bottom: 7px;
-  color: var(--faint);
-  font-size: 12px;
-  font-weight: 700;
-}
-
 .chat-message-user {
   justify-self: end;
   max-width: min(82%, 560px);

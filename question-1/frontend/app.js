@@ -933,14 +933,12 @@ function renderChatTurn(turn, index) {
   if (turn.role === "user") {
     return `
       <article class="chat-message chat-message-user" style="--i: ${index}">
-        <small>You</small>
         <p>${escapeHtml(turn.content)}</p>
       </article>
     `;
   }
   return `
     <article class="chat-message chat-message-assistant" data-turn-index="${index}" style="--i: ${index}">
-      <small>Assistant</small>
       <div class="markdown-body">${renderAssistantBody(turn)}</div>
       ${renderEvidence(turn.evidence || [])}
     </article>
