@@ -80,6 +80,11 @@ class RetrievalService:
             embedding_cache=embedding_cache,
         )
 
+    @property
+    def has_vector_index(self) -> bool:
+        """Return whether semantic search is backed by embedding vectors."""
+        return self._vector_store is not None
+
     def keyword_search(self, query: str, limit: int = 10) -> list[SearchResult]:
         """Return BM25 keyword search results."""
         query_tokens = tokenize(query.strip())

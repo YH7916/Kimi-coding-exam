@@ -138,6 +138,8 @@ $env:ONCALL_CHAT_API_KEY="..."
 $env:ONCALL_CHAT_MODEL="..."
 ```
 
+配置 `ONCALL_EMBEDDING_API_KEY` 后，`/v2/search` 会在启动时构建 SiliconFlow-backed vector index，并把 embedding 缓存在 `.cache/embeddings.sqlite3`；未配置时自动退回离线 semantic fallback。
+
 如果使用本地 Codex/OpenAI 反代，Codex 自身配置可能写成 `base_url = "http://127.0.0.1:8080"` 且 `wire_api = "responses"`。本项目当前的 Agent 走 Chat Completions tool-calling，因此应用侧应配置到 `/v1`：
 
 ```powershell

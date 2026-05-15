@@ -19,12 +19,15 @@ from oncall_app.api.schemas import (
 from oncall_app.api.static_files import read_frontend_shell
 from oncall_app.documents.repository import DocumentRepository
 from oncall_app.llm.chat_client import ChatClient, create_chat_client
-from oncall_app.llm.config import chat_config_from_env
+from oncall_app.llm.config import chat_config_from_env, embedding_config_from_env
+from oncall_app.llm.embedding_client import EmbeddingClient, create_embedding_client
 from oncall_app.models import ToolCall
+from oncall_app.retrieval.embeddings import EmbeddingCache
 from oncall_app.retrieval.service import RetrievalService
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = PROJECT_ROOT / "data"
+EMBEDDING_CACHE_PATH = PROJECT_ROOT / ".cache" / "embeddings.sqlite3"
 
 router = APIRouter()
 
@@ -32,11 +35,19 @@ router = APIRouter()
 class SearchRuntime:
     """Holds mutable document and retrieval state for the API process."""
 
-    def __init__(self, data_dir: Path, test_mode: bool = False):
+    def __init__(
+        self,
+        data_dir: Path,
+        test_mode: bool = False,
+        embedding_client: EmbeddingClient | None = None,
+        embedding_cache_path: Path | None = EMBEDDING_CACHE_PATH,
+    ):
         self.data_dir = data_dir
         self.test_mode = test_mode
+        self._embedding_client_override = embedding_client
+        self.embedding_cache_path = embedding_cache_path
         self.repository = DocumentRepository(data_dir)
-        self.service = RetrievalService.from_documents(self.repository.all_documents())
+        self.service = self._build_retrieval_service()
         self.assistant = self._build_assistant()
 
     def reset(self, test_mode: bool = False) -> None:
@@ -47,8 +58,34 @@ class SearchRuntime:
 
     def rebuild_index(self) -> None:
         """Rebuild retrieval indexes from repository documents."""
-        self.service = RetrievalService.from_documents(self.repository.all_documents())
+        self.service = self._build_retrieval_service()
         self.assistant = self._build_assistant()
+
+    def _build_retrieval_service(self) -> RetrievalService:
+        """Build v1/v2 retrieval with optional real embedding support."""
+        embedding_client, embedding_cache = self._embedding_components()
+        return RetrievalService.from_documents(
+            self.repository.all_documents(),
+            embedding_client=embedding_client,
+            embedding_cache=embedding_cache,
+        )
+
+    def _embedding_components(self) -> tuple[EmbeddingClient | None, EmbeddingCache | None]:
+        """Return embedding client/cache for production v2 search."""
+        if self._embedding_client_override is not None:
+            return self._embedding_client_override, None
+        if self.test_mode:
+            return None, None
+
+        config = embedding_config_from_env()
+        if not (config.base_url and config.api_key and config.model):
+            return None, None
+        cache = (
+            EmbeddingCache(self.embedding_cache_path, config.model)
+            if self.embedding_cache_path is not None
+            else None
+        )
+        return create_embedding_client(config), cache
 
     def _build_assistant(self) -> OnCallAssistant:
         """Build the v3 assistant."""

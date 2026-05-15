@@ -20,7 +20,7 @@ class FrontendStaticTest(unittest.TestCase):
 
     def test_pages_use_static_frontend_shell(self):
         """README page routes serve the shared static frontend shell."""
-        client = TestClient(create_app())
+        client = TestClient(create_app(test_mode=True))
 
         response = client.get("/v3")
 

@@ -12,7 +12,7 @@ class AppShellTest(unittest.TestCase):
 
     def test_health_endpoint(self):
         """The app exposes a health endpoint."""
-        client = TestClient(create_app())
+        client = TestClient(create_app(test_mode=True))
 
         response = client.get("/health")
 
@@ -21,7 +21,7 @@ class AppShellTest(unittest.TestCase):
 
     def test_readme_pages_exist(self):
         """The README page routes return HTML shells."""
-        client = TestClient(create_app())
+        client = TestClient(create_app(test_mode=True))
 
         for path in ("/v1", "/v2", "/v3"):
             with self.subTest(path=path):
