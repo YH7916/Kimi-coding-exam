@@ -25,23 +25,6 @@ class Document:
 
 
 @dataclass(frozen=True)
-class ManifestEntry:
-    """A file-level summary for Agent file selection."""
-
-    file: str
-    doc_id: str
-    title: str
-    topics: list[str]
-
-
-@dataclass(frozen=True)
-class SopManifest:
-    """Index manifest stored in data/sop-index.json."""
-
-    entries: list[ManifestEntry]
-
-
-@dataclass(frozen=True)
 class SearchResult:
     """A ranked search result returned by the search services."""
 

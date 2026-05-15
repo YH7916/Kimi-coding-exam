@@ -19,10 +19,22 @@ class SemanticRule(TypedDict):
 
 SEMANTIC_RULES: tuple[SemanticRule, ...] = (
     {
+        "triggers": ("p0", "响应流程", "升级流程", "战争室", "war room"),
+        "required_any": ("p0", "响应", "升级", "故障"),
+        "boosts": {"sop-001": 45.0, "sop-002": 42.0, "sop-005": 40.0, "sop-004": 36.0},
+        "terms": ("P0", "故障", "升级", "响应", "战争室", "负责人", "安全", "数据库", "SRE"),
+    },
+    {
         "triggers": ("服务器挂了", "服务挂了", "宕机", "不可用", "服务异常"),
         "required_any": ("服务器", "服务", "挂", "宕机", "不可用"),
         "boosts": {"sop-001": 35.0, "sop-004": 34.0},
         "terms": ("服务", "超时", "故障", "Kubernetes", "K8s", "集群", "告警", "后端", "SRE"),
+    },
+    {
+        "triggers": ("主从延迟", "数据库主从", "复制延迟", "慢查询", "连接池"),
+        "required_any": ("主从", "数据库", "复制", "延迟", "慢查询"),
+        "boosts": {"sop-002": 44.0},
+        "terms": ("数据库", "主从", "延迟", "复制", "SHOW SLAVE STATUS", "Binlog", "DBA"),
     },
     {
         "triggers": ("黑客攻击", "入侵", "被黑", "攻击", "漏洞"),

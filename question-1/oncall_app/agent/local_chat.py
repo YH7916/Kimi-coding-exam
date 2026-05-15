@@ -1,6 +1,10 @@
 """Local deterministic Chat Completions fallback."""
 
+import re
+
 from oncall_app.llm.openai_compat import JsonObject
+
+FILE_PATTERN = re.compile(r"file=(sop-\d{3}\.html)")
 
 
 class LocalChatClient:  # pylint: disable=too-few-public-methods
@@ -14,7 +18,12 @@ class LocalChatClient:  # pylint: disable=too-few-public-methods
         """Return a tool call first, then a concise SOP-grounded answer."""
         del tools
         if not any(message.get("role") == "tool" for message in messages):
-            return _tool_call_response(_select_files(_last_user_message(messages)))
+            candidates = _candidate_files(messages)
+            if not candidates:
+                return _no_candidate_response()
+            selected = _select_files(_last_user_message(messages))
+            selected = [fname for fname in selected if fname in candidates] or candidates[:1]
+            return _tool_call_response(selected)
         return _answer_response(messages)
 
 
@@ -47,6 +56,32 @@ def _select_files(message: str) -> list[str]:
         if matches:
             return files
     return ["sop-001.html"]
+
+
+def _candidate_files(messages: list[JsonObject]) -> list[str]:
+    """Extract v2 retrieval candidate files from system context."""
+    files = []
+    for message in messages:
+        if message.get("role") != "system":
+            continue
+        for fname in FILE_PATTERN.findall(str(message.get("content") or "")):
+            if fname not in files:
+                files.append(fname)
+    return files
+
+
+def _no_candidate_response() -> JsonObject:
+    """Return a final answer when v2 retrieval supplied no SOP candidates."""
+    return {
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "v2 检索没有返回候选 SOP，无法在不读取索引文件的前提下回答。",
+                }
+            }
+        ]
+    }
 
 
 def _tool_call_response(fnames: list[str]) -> JsonObject:

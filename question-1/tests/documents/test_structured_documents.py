@@ -30,14 +30,5 @@ class StructuredDocumentTest(unittest.TestCase):
         self.assertIn("三、常见故障处理", headings)
         self.assertIn("场景二：单服务OOM崩溃", headings)
 
-    def test_manifest_contains_all_files(self):
-        """Repository can build an Agent-readable SOP manifest."""
-        repository = DocumentRepository(DATA_DIR)
-        manifest = repository.build_manifest()
-
-        self.assertEqual(len(manifest.entries), 10)
-        self.assertIn("sop-001.html", [entry.file for entry in manifest.entries])
-
-
 if __name__ == "__main__":
     unittest.main()

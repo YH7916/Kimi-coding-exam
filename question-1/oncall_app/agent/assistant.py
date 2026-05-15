@@ -16,7 +16,6 @@ from oncall_app.llm.openai_compat import JsonObject
 from oncall_app.models import AgentResponse, SearchResult
 
 MAX_TOOL_ROUNDS = 4
-MANIFEST_FILE = "sop-index.json"
 
 
 class OnCallAssistant:  # pylint: disable=too-few-public-methods
@@ -36,18 +35,12 @@ class OnCallAssistant:  # pylint: disable=too-few-public-methods
     def chat(
         self,
         message: str,
-        retrieval_candidates: list[SearchResult] | None = None,
+        retrieval_candidates: list[SearchResult],
     ) -> AgentResponse:
         """Answer a user message with tool-calling."""
-        candidates = retrieval_candidates or []
+        candidates = retrieval_candidates
         tool_calls: list = []
-        if candidates:
-            messages = self._initial_messages(message, candidates)
-        else:
-            self.repository.write_manifest(MANIFEST_FILE)
-            manifest_observation = self.read_file_tool.read_file(MANIFEST_FILE)
-            tool_calls = [manifest_observation.call]
-            messages = self._initial_messages(message, candidates, manifest_observation.content)
+        messages = self._initial_messages(message, candidates)
 
         for _ in range(self.max_tool_rounds):
             response = self.chat_client.create_chat_completion(messages, READ_FILE_TOOLS)
@@ -80,29 +73,12 @@ class OnCallAssistant:  # pylint: disable=too-few-public-methods
     def _initial_messages(
         message: str,
         retrieval_candidates: list[SearchResult],
-        manifest_content: str = "",
     ) -> list[JsonObject]:
         """Build initial Chat Completions messages."""
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": _candidate_context(retrieval_candidates)},
         ]
-        if retrieval_candidates:
-            messages.append(
-                {
-                    "role": "system",
-                    "content": _candidate_context(retrieval_candidates),
-                }
-            )
-        else:
-            messages.append(
-                {
-                    "role": "system",
-                    "content": (
-                        f"readFile({MANIFEST_FILE}) returned this SOP index:\n"
-                        f"{manifest_content}"
-                    ),
-                }
-            )
         messages.append({"role": "user", "content": message})
         return messages
 
@@ -183,8 +159,11 @@ def _candidate_context(candidates: list[SearchResult]) -> str:
     """Build model-visible candidate files from v2 hybrid retrieval."""
     lines = [
         "Hybrid retrieval candidates from v2 semantic_search.",
-        "Prefer these files before using any fallback index; read original SOPs with readFile.",
+        "Read original SOPs with readFile using only these candidate file names.",
     ]
+    if not candidates:
+        lines.append("No SOP candidates were returned; do not call readFile.")
+        return "\n".join(lines)
     for index, candidate in enumerate(candidates, start=1):
         fname = f"{candidate.doc_id}.html"
         lines.append(

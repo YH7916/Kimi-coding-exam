@@ -4,7 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from oncall_app.agent.assistant import MANIFEST_FILE, OnCallAssistant
+from oncall_app.agent.assistant import OnCallAssistant
 from oncall_app.agent.local_chat import LocalChatClient
 from oncall_app.documents.repository import DocumentRepository
 from oncall_app.evaluation.cases import EvalCase, load_default_cases
@@ -51,7 +51,11 @@ def run_evaluation(cases: list[EvalCase] | None = None) -> EvaluationReport:
         service.semantic_search,
         k=3,
     )
-    v3_tool_files, v3_keywords = _agent_metrics(_cases_for_phase(eval_cases, "v3"), assistant)
+    v3_tool_files, v3_keywords = _agent_metrics(
+        _cases_for_phase(eval_cases, "v3"),
+        assistant,
+        service,
+    )
 
     return EvaluationReport(
         case_count=len(eval_cases),
@@ -101,15 +105,20 @@ def _retrieval_metrics(
     return hit_rate_at_k(expected, actual, k=k), mrr(expected, actual)
 
 
-def _agent_metrics(cases: list[EvalCase], assistant: OnCallAssistant) -> tuple[float, float]:
+def _agent_metrics(
+    cases: list[EvalCase],
+    assistant: OnCallAssistant,
+    service: RetrievalService,
+) -> tuple[float, float]:
     """Run agent cases and return tool-file and keyword scores."""
-    expected, actual, keywords, answers = _agent_batches(cases, assistant)
+    expected, actual, keywords, answers = _agent_batches(cases, assistant, service)
     return tool_file_accuracy(expected, actual), keyword_coverage(keywords, answers)
 
 
 def _agent_batches(
     cases: list[EvalCase],
     assistant: OnCallAssistant,
+    service: RetrievalService,
 ) -> tuple[list[list[str]], list[list[str]], list[list[str]], list[str]]:
     """Run agent cases and return expected/actual file and answer batches."""
     expected_files = [list(case.expected_files) for case in cases]
@@ -117,12 +126,13 @@ def _agent_batches(
     expected_keywords = [list(case.must_include) for case in cases]
     answers = []
     for case in cases:
-        response = assistant.chat(case.query)
+        candidates = service.semantic_search(case.query)
+        response = assistant.chat(case.query, retrieval_candidates=candidates)
         actual_files.append(
             [
                 call.fname
                 for call in response.tool_calls
-                if call.tool == "readFile" and call.fname != MANIFEST_FILE
+                if call.tool == "readFile"
             ]
         )
         answers.append(response.answer)

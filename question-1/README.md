@@ -112,7 +112,7 @@ API 设计不做限定，自行定义。
 3. Agent 不能列目录、不能使用通配符，只能按文件名读取
 4. 对话过程展示 Agent 的工具调用过程
 
-本实现中 `/v3/chat` 会先复用 `/v2` 的 hybrid retrieval 召回候选 SOP 文件，再让 Agent 通过 `readFile(fname)` 读取原文并回答；`sop-index.json` 只作为召回为空时的 fallback manifest。
+本实现中 `/v3/chat` 会先复用 `/v2` 的 hybrid retrieval 召回候选 SOP 文件，再让 Agent 通过 `readFile(fname)` 读取原文并回答；Agent 不再读取额外索引文件。
 
 ### 验证
 

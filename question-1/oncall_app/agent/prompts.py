@@ -6,7 +6,7 @@ SYSTEM_PROMPT = """You are an On-Call SOP assistant.
 Use only the readFile tool when you need SOP file contents.
 Do not ask for directory listings, glob patterns, or hidden files.
 Use provided hybrid retrieval candidates as the primary file-selection signal.
-Use sop-index.json only as a fallback when retrieval candidates are missing or insufficient.
+Do not read index files; read only SOP HTML files from the provided candidates.
 For P0 questions, read multiple relevant SOP files before answering.
 Answer in Chinese, cite SOP file names and section headings when possible, and do not reveal hidden reasoning.
 """
@@ -21,7 +21,7 @@ READ_FILE_TOOL: JsonObject = {
             "properties": {
                 "fname": {
                     "type": "string",
-                    "description": "Direct file name, for example sop-001.html or sop-index.json.",
+                    "description": "Direct SOP HTML file name from the retrieval candidates.",
                 }
             },
             "required": ["fname"],

@@ -1,12 +1,9 @@
 """Structured document repository."""
 
-import json
-from dataclasses import asdict
 from pathlib import Path
 
-from oncall_app.documents.manifest import build_manifest
 from oncall_app.documents.parser import parse_document
-from oncall_app.models import Document, SopManifest
+from oncall_app.models import Document
 
 FORBIDDEN_FILE_NAME_CHARS = {"*", "?", "[", "]"}
 
@@ -39,17 +36,6 @@ class DocumentRepository:
         """Return a parsed document by id."""
         return self._documents[doc_id]
 
-    def build_manifest(self) -> SopManifest:
-        """Build an Agent-readable manifest."""
-        return build_manifest(self.all_documents())
-
-    def write_manifest(self, fname: str = "sop-index.json") -> Path:
-        """Write the Agent-readable manifest into the data directory."""
-        path = self._safe_data_path(fname)
-        payload = {"entries": [asdict(entry) for entry in self.build_manifest().entries]}
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        return path
-
     def read_file(self, fname: str) -> str:
         """Read a direct file name from the data directory."""
         return self._safe_data_path(fname).read_text(encoding="utf-8")
@@ -60,6 +46,6 @@ class DocumentRepository:
         if path.name != fname or any(char in fname for char in FORBIDDEN_FILE_NAME_CHARS):
             raise ValueError("readFile only accepts a direct file name")
         candidate = self.data_dir / fname
-        if not candidate.exists() and fname != "sop-index.json":
+        if not candidate.exists():
             raise FileNotFoundError(fname)
         return candidate

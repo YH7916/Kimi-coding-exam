@@ -84,7 +84,7 @@ class ToolCallingAgentTest(unittest.TestCase):
         )
         fnames = [call.fname for call in response.tool_calls]
 
-        self.assertNotIn("sop-index.json", fnames)
+        self.assertTrue(all(fname.endswith(".html") for fname in fnames))
         self.assertIn("sop-001.html", fnames)
         self.assertIn("堆转储", response.answer)
         self.assertEqual(response.retrieval_candidates[0].doc_id, "sop-001")
