@@ -41,6 +41,14 @@ let mode = modeFromPath(window.location.pathname);
 let config = MODES[mode];
 const chatTurns = [];
 
+function isActiveChat() {
+  return mode === "v3" && chatTurns.length > 0;
+}
+
+function hasPendingChatTurn() {
+  return chatTurns.some((turn) => turn.role === "pending");
+}
+
 function escapeHtml(value) {
   return String(value)
     .replaceAll("&", "&amp;")
@@ -229,28 +237,15 @@ function setupNavigation() {
 }
 
 function renderShell() {
-  app.innerHTML = `
-    <section class="home">
-      <p class="kicker">${escapeHtml(config.kicker)}</p>
-      <h1>${escapeHtml(config.title)}</h1>
-      <p class="subtitle">${escapeHtml(config.subtitle)}</p>
-      <form id="query-form" class="query-box">
-        <textarea name="q" rows="1" placeholder="${escapeHtml(config.placeholder)}" autofocus></textarea>
-        <button class="send-button" type="submit" aria-label="Submit query">
-          <svg aria-hidden="true" viewBox="0 0 24 24">
-            <path d="M12 19V5"></path>
-            <path d="m5 12 7-7 7 7"></path>
-          </svg>
-        </button>
-      </form>
-    </section>
-    <section id="results" class="results" aria-label="${escapeHtml(config.resultTitle)}"></section>
-  `;
+  const activeChat = isActiveChat();
+  document.body.classList.toggle("chat-active", activeChat);
+  app.innerHTML = activeChat ? renderChatShell() : renderHomeShell();
 
   const form = document.querySelector("#query-form");
   const textarea = form.querySelector("textarea");
   const submitButton = form.querySelector(".send-button");
   let isSubmitting = false;
+  submitButton.disabled = mode === "v3" && hasPendingChatTurn();
 
   textarea.addEventListener("input", () => {
     textarea.style.height = "auto";
@@ -267,7 +262,7 @@ function renderShell() {
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
-    if (isSubmitting) {
+    if (isSubmitting || (mode === "v3" && hasPendingChatTurn())) {
       return;
     }
     const q = new FormData(event.target).get("q") || "";
@@ -277,6 +272,10 @@ function renderShell() {
     }
     isSubmitting = true;
     submitButton.disabled = true;
+    if (mode === "v3") {
+      textarea.value = "";
+      textarea.style.height = "auto";
+    }
     try {
       if (mode === "v3") {
         await submitChat(q);
@@ -285,13 +284,50 @@ function renderShell() {
       }
     } finally {
       isSubmitting = false;
-      submitButton.disabled = false;
+      submitButton.disabled = mode === "v3" && hasPendingChatTurn();
     }
   });
 
-  if (mode === "v3" && chatTurns.length) {
+  if (activeChat) {
     renderChatConversation();
   }
+}
+
+function renderHomeShell() {
+  return `
+    <section class="home">
+      <p class="kicker">${escapeHtml(config.kicker)}</p>
+      <h1>${escapeHtml(config.title)}</h1>
+      <p class="subtitle">${escapeHtml(config.subtitle)}</p>
+      <form id="query-form" class="query-box">
+        <textarea name="q" rows="1" placeholder="${escapeHtml(config.placeholder)}" autofocus></textarea>
+        <button class="send-button" type="submit" aria-label="Submit query">
+          <svg aria-hidden="true" viewBox="0 0 24 24">
+            <path d="M12 19V5"></path>
+            <path d="m5 12 7-7 7 7"></path>
+          </svg>
+        </button>
+      </form>
+    </section>
+    <section id="results" class="results" aria-label="${escapeHtml(config.resultTitle)}"></section>
+  `;
+}
+
+function renderChatShell() {
+  return `
+    <section class="chat-screen">
+      <section id="results" class="results chat-results" aria-label="${escapeHtml(config.resultTitle)}"></section>
+      <form id="query-form" class="query-box chat-composer">
+        <textarea name="q" rows="1" placeholder="继续追问 SOP，或要求展开某个步骤" autofocus></textarea>
+        <button class="send-button" type="submit" aria-label="Submit query">
+          <svg aria-hidden="true" viewBox="0 0 24 24">
+            <path d="M12 19V5"></path>
+            <path d="m5 12 7-7 7 7"></path>
+          </svg>
+        </button>
+      </form>
+    </section>
+  `;
 }
 
 function renderLoading(label) {
@@ -367,7 +403,7 @@ async function submitChat(message) {
   const history = visibleChatHistory();
   chatTurns.push({ role: "user", content: String(message) });
   chatTurns.push({ role: "pending", content: "Reading SOP evidence" });
-  renderChatConversation();
+  renderShell();
   try {
     const response = await fetch(config.endpoint, {
       method: "POST",
@@ -386,14 +422,14 @@ async function submitChat(message) {
       trace: payload.trace || [],
       toolCalls: payload.tool_calls || [],
     });
-    renderChatConversation();
+    renderShell();
   } catch (error) {
     removePendingTurn();
     chatTurns.push({
       role: "error",
       content: error.message || "Unknown error",
     });
-    renderChatConversation();
+    renderShell();
   }
 }
 
@@ -425,14 +461,14 @@ function renderChatConversation() {
   const latest = latestAssistantTurn();
   const trace = latest?.trace || [];
   const toolCalls = latest?.toolCalls || [];
-  const visibleTurns = chatTurns.filter((turn) => turn.role !== "pending").length;
+  const visibleTurns = chatTurns.filter((turn) => turn.role === "user" || turn.role === "assistant").length;
 
   document.querySelector("#results").innerHTML = `
-    <div class="agent-layout result-enter">
-      <section class="answer-panel">
-        <div class="section-heading">
-          <h2>Conversation</h2>
-          <span>${visibleTurns} turns</span>
+    <div class="agent-layout chat-agent-layout result-enter">
+      <section class="answer-panel chat-thread-panel">
+        <div class="chat-thread-header">
+          <span>On-Call Agent</span>
+          <small>${visibleTurns} turns</small>
         </div>
         <div class="chat-list">
           ${chatTurns.map((turn, index) => renderChatTurn(turn, index)).join("")}
