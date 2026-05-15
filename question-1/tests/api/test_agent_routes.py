@@ -23,6 +23,8 @@ class AgentRouteTest(unittest.TestCase):
         self.assertEqual(payload["tool_calls"][0]["tool"], "readFile")
         self.assertIn("sop-001.html", [call["fname"] for call in payload["tool_calls"]])
         self.assertIn("trace", payload)
+        self.assertTrue(any(item["type"] == "retrieval" for item in payload["trace"]))
+        self.assertIn("sop-001.html", payload["trace"][0]["message"])
         self.assertTrue(any(item["type"] == "tool_call" for item in payload["trace"]))
         self.assertTrue(any("OOM" in item["section"] for item in payload["evidence"]))
 

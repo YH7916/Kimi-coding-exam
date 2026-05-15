@@ -28,6 +28,7 @@ from oncall_app.retrieval.service import RetrievalService
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = PROJECT_ROOT / "data"
 EMBEDDING_CACHE_PATH = PROJECT_ROOT / ".cache" / "embeddings.sqlite3"
+AGENT_CANDIDATE_LIMIT = 5
 
 router = APIRouter()
 
@@ -60,6 +61,11 @@ class SearchRuntime:
         """Rebuild retrieval indexes from repository documents."""
         self.service = self._build_retrieval_service()
         self.assistant = self._build_assistant()
+
+    def chat(self, message: str):
+        """Answer with v2 hybrid retrieval candidates feeding the v3 Agent."""
+        candidates = self.service.semantic_search(message, limit=AGENT_CANDIDATE_LIMIT)
+        return self.assistant.chat(message, retrieval_candidates=candidates)
 
     def _build_retrieval_service(self) -> RetrievalService:
         """Build v1/v2 retrieval with optional real embedding support."""
@@ -138,7 +144,7 @@ def v2_search(q: str = Query(default="")) -> SearchResponse:
 @router.post("/v3/chat")
 def v3_chat(payload: ChatRequest) -> ChatResponse:
     """Answer an On-Call question with a traceable tool-using Agent."""
-    response = runtime.assistant.chat(payload.message)
+    response = runtime.chat(payload.message)
     evidence = _evidence_for_tool_calls(payload.message, response.tool_calls)
     return chat_response(response, evidence)
 

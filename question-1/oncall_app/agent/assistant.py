@@ -13,7 +13,7 @@ from oncall_app.documents.parser import parse_document
 from oncall_app.documents.repository import DocumentRepository
 from oncall_app.llm.chat_client import ChatClient
 from oncall_app.llm.openai_compat import JsonObject
-from oncall_app.models import AgentResponse
+from oncall_app.models import AgentResponse, SearchResult
 
 MAX_TOOL_ROUNDS = 4
 MANIFEST_FILE = "sop-index.json"
@@ -33,12 +33,21 @@ class OnCallAssistant:  # pylint: disable=too-few-public-methods
         self.max_tool_rounds = max_tool_rounds
         self.read_file_tool = ReadFileTool(repository)
 
-    def chat(self, message: str) -> AgentResponse:
+    def chat(
+        self,
+        message: str,
+        retrieval_candidates: list[SearchResult] | None = None,
+    ) -> AgentResponse:
         """Answer a user message with tool-calling."""
-        self.repository.write_manifest(MANIFEST_FILE)
-        manifest_observation = self.read_file_tool.read_file(MANIFEST_FILE)
-        tool_calls = [manifest_observation.call]
-        messages = self._initial_messages(message, manifest_observation.content)
+        candidates = retrieval_candidates or []
+        tool_calls: list = []
+        if candidates:
+            messages = self._initial_messages(message, candidates)
+        else:
+            self.repository.write_manifest(MANIFEST_FILE)
+            manifest_observation = self.read_file_tool.read_file(MANIFEST_FILE)
+            tool_calls = [manifest_observation.call]
+            messages = self._initial_messages(message, candidates, manifest_observation.content)
 
         for _ in range(self.max_tool_rounds):
             response = self.chat_client.create_chat_completion(messages, READ_FILE_TOOLS)
@@ -49,6 +58,7 @@ class OnCallAssistant:  # pylint: disable=too-few-public-methods
                 return AgentResponse(
                     answer=str(assistant_message.get("content") or ""),
                     tool_calls=tool_calls,
+                    retrieval_candidates=candidates,
                 )
             round_observations: list[ToolObservation] = []
             for tool_call in requested_tools:
@@ -63,22 +73,38 @@ class OnCallAssistant:  # pylint: disable=too-few-public-methods
         return AgentResponse(
             answer="工具调用轮次已达到上限，请缩小问题范围后重试。",
             tool_calls=tool_calls,
+            retrieval_candidates=candidates,
         )
 
     @staticmethod
-    def _initial_messages(message: str, manifest_content: str) -> list[JsonObject]:
+    def _initial_messages(
+        message: str,
+        retrieval_candidates: list[SearchResult],
+        manifest_content: str = "",
+    ) -> list[JsonObject]:
         """Build initial Chat Completions messages."""
-        return [
+        messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {
-                "role": "system",
-                "content": (
-                    f"readFile({MANIFEST_FILE}) returned this SOP index:\n"
-                    f"{manifest_content}"
-                ),
-            },
-            {"role": "user", "content": message},
         ]
+        if retrieval_candidates:
+            messages.append(
+                {
+                    "role": "system",
+                    "content": _candidate_context(retrieval_candidates),
+                }
+            )
+        else:
+            messages.append(
+                {
+                    "role": "system",
+                    "content": (
+                        f"readFile({MANIFEST_FILE}) returned this SOP index:\n"
+                        f"{manifest_content}"
+                    ),
+                }
+            )
+        messages.append({"role": "user", "content": message})
+        return messages
 
     def _execute_tool_call(self, tool_call: JsonObject):
         """Execute one model-requested tool call."""
@@ -151,3 +177,18 @@ def _tool_message(tool_call: JsonObject, content: str) -> JsonObject:
         "name": "readFile",
         "content": content,
     }
+
+
+def _candidate_context(candidates: list[SearchResult]) -> str:
+    """Build model-visible candidate files from v2 hybrid retrieval."""
+    lines = [
+        "Hybrid retrieval candidates from v2 semantic_search.",
+        "Prefer these files before using any fallback index; read original SOPs with readFile.",
+    ]
+    for index, candidate in enumerate(candidates, start=1):
+        fname = f"{candidate.doc_id}.html"
+        lines.append(
+            f"{index}. file={fname}; title={candidate.title}; "
+            f"score={candidate.score}; snippet={candidate.snippet}"
+        )
+    return "\n".join(lines)

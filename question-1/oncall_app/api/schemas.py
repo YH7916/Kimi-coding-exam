@@ -92,6 +92,15 @@ def search_response(query: str, results: list[SearchResult]) -> SearchResponse:
 
 def chat_response(response: AgentResponse, evidence: list[EvidenceItem]) -> ChatResponse:
     """Convert an agent response into API schema."""
+    retrieval_trace = []
+    if response.retrieval_candidates:
+        files = ", ".join(f"{candidate.doc_id}.html" for candidate in response.retrieval_candidates)
+        retrieval_trace.append(
+            TraceResponseItem(
+                type="retrieval",
+                message=f"v2 hybrid retrieval candidates: {files}",
+            )
+        )
     return ChatResponse(
         answer=response.answer,
         tool_calls=[_tool_call_item(call) for call in response.tool_calls],
@@ -103,7 +112,8 @@ def chat_response(response: AgentResponse, evidence: list[EvidenceItem]) -> Chat
             )
             for item in evidence
         ],
-        trace=[
+        trace=retrieval_trace
+        + [
             TraceResponseItem(type="tool_call", message=f'readFile("{call.fname}")')
             for call in response.tool_calls
         ]

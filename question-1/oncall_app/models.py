@@ -66,3 +66,4 @@ class AgentResponse:
 
     answer: str
     tool_calls: list[ToolCall]
+    retrieval_candidates: list[SearchResult] = field(default_factory=list)
