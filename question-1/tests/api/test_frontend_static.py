@@ -54,6 +54,15 @@ class FrontendStaticTest(unittest.TestCase):
         self.assertIn("openSopModal", js)
         self.assertIn("data-sop-id", js)
         self.assertIn("data-sop-section", js)
+        self.assertIn("evidence-section", js)
+
+    def test_v3_evidence_cards_use_three_column_grid(self):
+        """V3 evidence cards are rendered as a compact SOP grid."""
+        css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+
+        self.assertIn(".evidence-strip", css)
+        self.assertIn("grid-template-columns: repeat(3, minmax(0, 1fr));", css)
+        self.assertIn("-webkit-line-clamp: 2;", css)
 
 
 if __name__ == "__main__":

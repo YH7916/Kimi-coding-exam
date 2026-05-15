@@ -849,12 +849,36 @@ body.chat-active .chat-message-assistant {
 
 .evidence-card {
   width: 100%;
+  min-height: 138px;
+  display: flex;
+  flex-direction: column;
   color: inherit;
   text-align: left;
   cursor: pointer;
   transition:
     background 160ms var(--ease-out-quart),
     border-color 160ms var(--ease-out-quart);
+}
+
+.evidence-card small {
+  margin-top: 0;
+  margin-bottom: 8px;
+}
+
+.evidence-card h3,
+.evidence-card p {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+}
+
+.evidence-card h3 {
+  -webkit-line-clamp: 2;
+}
+
+.evidence-card p {
+  -webkit-line-clamp: 2;
+  font-size: 12px;
 }
 
 .trace-item span {
@@ -865,8 +889,32 @@ body.chat-active .chat-message-assistant {
   font-weight: 680;
 }
 
-.evidence-strip {
+.evidence-section {
   margin-top: 12px;
+}
+
+.evidence-section-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.evidence-section-header span {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 720;
+}
+
+.evidence-section-header small {
+  color: var(--faint);
+  font-size: 12px;
+}
+
+.evidence-strip {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
 }
 
 .sop-modal-backdrop {
@@ -1124,8 +1172,18 @@ body.chat-active .chat-message-assistant {
     position: static;
   }
 
+  .evidence-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .sop-modal {
     width: calc(100vw - 24px);
     max-height: calc(100svh - 24px);
+  }
+}
+
+@media (max-width: 520px) {
+  .evidence-strip {
+    grid-template-columns: 1fr;
   }
 }

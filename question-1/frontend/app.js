@@ -857,9 +857,15 @@ function renderEvidence(evidence) {
   if (!evidence.length) {
     return "";
   }
+  const cards = evidence.slice(0, 6);
   return `
-    <div class="evidence-strip">
-      ${evidence.slice(0, 3).map((item, index) => `
+    <section class="evidence-section" aria-label="引用 SOP">
+      <div class="evidence-section-header">
+        <span>引用 SOP</span>
+        <small>${cards.length} 条</small>
+      </div>
+      <div class="evidence-strip">
+        ${cards.map((item, index) => `
         <button
           type="button"
           class="evidence-card sop-open-button"
@@ -871,8 +877,9 @@ function renderEvidence(evidence) {
           <h3>${escapeHtml(item.section)}</h3>
           <p>${escapeHtml(item.text)}</p>
         </button>
-      `).join("")}
-    </div>
+        `).join("")}
+      </div>
+    </section>
   `;
 }
 
