@@ -1,5 +1,5 @@
 """Agent implementations and tools."""
 
-from oncall_app.agent.legacy import OnCallAgent
+from oncall_app.agent.assistant import OnCallAssistant
 
-__all__ = ["OnCallAgent"]
+__all__ = ["OnCallAssistant"]
