@@ -1,6 +1,6 @@
 """Hybrid retrieval tests."""
 
-# pylint: disable=too-few-public-methods
+# pylint: disable=protected-access,too-few-public-methods
 
 import unittest
 from pathlib import Path
@@ -19,6 +19,16 @@ class FakeEmbeddingClient:
     def embed(self, text: str) -> list[float]:
         """Return a tiny deterministic topic vector."""
         if "服务" in text or "K8s" in text or "服务器" in text:
+            return [1.0, 0.0]
+        return [0.0, 1.0]
+
+
+class MobileOomEmbeddingClient:
+    """Embedding client that makes vector-only OOM retrieval prefer mobile incidents."""
+
+    def embed(self, text: str) -> list[float]:
+        """Return a tiny deterministic vector for OOM ambiguity tests."""
+        if "移动客户端" in text or "Crashlytics" in text or "OOM" in text:
             return [1.0, 0.0]
         return [0.0, 1.0]
 
@@ -63,6 +73,20 @@ class HybridRetrievalTest(unittest.TestCase):
 
         self.assertIn("sop-003", ids)
         self.assertIn("sop-010", ids)
+
+    def test_exact_oom_signal_beats_vector_near_tie(self):
+        """Short technical OOM queries should keep the backend SOP first."""
+        repository = DocumentRepository(DATA_DIR)
+        service = RetrievalService.from_documents(
+            repository.all_documents(),
+            embedding_client=MobileOomEmbeddingClient(),
+        )
+
+        vector_results = service._vector_search("OOM怎么办", limit=2)
+        results = service.semantic_search("OOM怎么办")
+
+        self.assertEqual(vector_results[0].doc_id, "sop-007")
+        self.assertEqual(results[0].doc_id, "sop-001")
 
 
 if __name__ == "__main__":

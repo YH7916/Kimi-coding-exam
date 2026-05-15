@@ -177,7 +177,7 @@ def _evidence_for_tool_calls(message: str, tool_calls: list[ToolCall]) -> list[E
     return EvidenceExtractor().extract(message, documents)
 
 
-runtime = SearchRuntime(DATA_DIR)
+runtime = SearchRuntime(DATA_DIR, test_mode=True)
 
 
 def reset_runtime(test_mode: bool = False) -> None:

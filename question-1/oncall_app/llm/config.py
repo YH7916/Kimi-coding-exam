@@ -3,8 +3,12 @@
 import os
 from dataclasses import dataclass
 
+from dotenv import load_dotenv
+
 SILICONFLOW_BASE_URL = "https://api.siliconflow.cn/v1"
 DEFAULT_EMBEDDING_MODEL = "Qwen/Qwen3-Embedding-0.6B"
+
+load_dotenv()
 
 
 @dataclass(frozen=True)
