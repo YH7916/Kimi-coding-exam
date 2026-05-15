@@ -1,33 +1,37 @@
-# AI 编程面试题
+# Kimi Coding Exam - Question 1
 
-## 说明
+本仓库提交的是题目一：On-Call 助手。
 
-本仓库包含两道可选的编程面试题，候选人**任选其一**完成即可。
+## 目录说明
 
-> 通过本测试即视为通过一面，后续仅需再通过一轮面试即发放 Offer。
+- `question-1/`：On-Call 助手源码、前端页面、测试和题目 README。
+- `prompt/`：AI 交互过程导出的 prompt Markdown，已对密钥和 token 做脱敏处理。
+- `screenshot/`：最终产物效果截图。
+- `李宇晗简历.pdf`：个人简历。
+- `.git/`：完整 Git 提交历史。
 
-| 题目 | 说明 |
-| ---- | ---- |
-| [题目一：On-Call 助手](./question-1/) | 构建一个基于 SOP 文档的 On-Call 助手，包含搜索引擎、语义搜索和 Agent 对话三个阶段 |
-| [题目二：Antigravity 动画复刻](./question-2/) | 像素级复刻 antigravity.google 页面的粒子动画效果 |
+本提交不包含 `question-2/`、`docs/`、`.env`、缓存目录、虚拟环境或依赖安装目录。
 
-## 通用规则
+## 运行方式
 
-- 编程语言和框架不限，但好的技术栈选择也是评价的一部分
-- **强烈鼓励使用任何 AI 工具辅助开发** — 无论你的技术背景是什么，两道题都可以借助 AI 来完成
-- 可以使用任何外部工具和资源，但**必须独立完成**，不得在他人协助下完成题目
-- 请保留完整的 Git 提交历史
-
-## 提交方式
-
-1. 按照对应题目 README 中的目录结构组织产物
-2. 将与 AI 交互过程中的所有提示词截图放入 `prompt/` 目录
-3. 将最终产物的效果截图放入 `screenshot/` 目录
-4. 将你的**个人简历**放入仓库根目录
-5. 打包**整个 Git 仓库**（包含 `.git` 目录）为 `.zip` 文件
-6. 将 `.zip` 文件发送到指定邮箱
-
-```bash
-# 打包示例
-zip -r your-name-exam.zip . -x "node_modules/*"
+```powershell
+cd question-1
+python app.py
 ```
+
+打开：
+
+- `http://127.0.0.1:8000/v1`
+- `http://127.0.0.1:8000/v2`
+- `http://127.0.0.1:8000/v3`
+
+## 验证方式
+
+```powershell
+cd question-1
+python scripts/evaluate.py
+python -m unittest
+npm run lint:frontend
+```
+
+默认测试不会访问外部网络；未配置真实 API Key 时会使用离线 fallback。
