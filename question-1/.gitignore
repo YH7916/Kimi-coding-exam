@@ -3,5 +3,7 @@ __pycache__/
 .pytest_cache/
 .pylint.d/
 .mypy_cache/
+.cache/
 .venv/
 venv/
+AGENTS.md

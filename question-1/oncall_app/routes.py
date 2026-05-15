@@ -1,7 +1,7 @@
 """HTTP route orchestration for the On-Call assistant."""
 
-from dataclasses import dataclass
 import json
+from dataclasses import dataclass
 from urllib.parse import parse_qs, urlsplit
 
 from oncall_app.agent import OnCallAgent

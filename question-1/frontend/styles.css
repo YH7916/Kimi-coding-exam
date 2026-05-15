@@ -1,0 +1,64 @@
+body {
+  font-family: system-ui, sans-serif;
+  margin: 0;
+  color: #1f2933;
+  background: #f7f8fa;
+}
+
+main {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 28px;
+}
+
+nav {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+input,
+textarea {
+  width: min(760px, 100%);
+  padding: 10px;
+  border: 1px solid #ccd3dc;
+}
+
+textarea {
+  min-height: 96px;
+}
+
+button {
+  margin-top: 8px;
+  padding: 9px 14px;
+}
+
+article,
+pre {
+  background: white;
+  border: 1px solid #e2e8f0;
+  padding: 14px;
+}
+
+.trace-list,
+.tool-list,
+.evidence-list {
+  display: grid;
+  gap: 10px;
+  margin: 16px 0;
+}
+
+.trace-item,
+.evidence-card {
+  border-radius: 6px;
+}
+
+.trace-item strong {
+  display: inline-block;
+  margin-bottom: 6px;
+}
+
+.evidence-card h2 {
+  font-size: 16px;
+  margin: 0 0 8px;
+}

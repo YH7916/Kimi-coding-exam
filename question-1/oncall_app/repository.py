@@ -5,7 +5,6 @@ from pathlib import Path
 from oncall_app.html_parser import parse_html_document
 from oncall_app.models import Document
 
-
 FORBIDDEN_FILE_NAME_CHARS = {"*", "?", "[", "]"}
 
 

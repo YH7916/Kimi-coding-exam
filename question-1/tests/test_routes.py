@@ -1,12 +1,11 @@
 """Tests for HTTP route orchestration."""
 
 import json
-from pathlib import Path
 import unittest
+from pathlib import Path
 
 from oncall_app.repository import DocumentRepository
 from oncall_app.routes import Router
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = PROJECT_ROOT / "data"

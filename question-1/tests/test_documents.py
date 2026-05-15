@@ -1,11 +1,10 @@
 """Tests for SOP document parsing and repository access."""
 
-from pathlib import Path
 import unittest
+from pathlib import Path
 
 from oncall_app.html_parser import parse_html_document
 from oncall_app.repository import DocumentRepository
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = PROJECT_ROOT / "data"

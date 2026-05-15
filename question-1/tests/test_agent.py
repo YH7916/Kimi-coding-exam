@@ -1,11 +1,10 @@
 """Tests for the tool-using On-Call assistant agent."""
 
-from pathlib import Path
 import unittest
+from pathlib import Path
 
 from oncall_app.agent import OnCallAgent
 from oncall_app.repository import DocumentRepository
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = PROJECT_ROOT / "data"

@@ -121,3 +121,44 @@ API 设计不做限定，自行定义。
 | "P0 故障的响应流程是什么？"       | Agent 综合多个 SOP 给出完整回答                            |
 | "怀疑有人入侵了系统"             | Agent 找到 sop-005.html，给出安全事件响应流程              |
 | "推荐结果质量下降了"             | Agent 找到 sop-008.html，给出排查方向                      |
+
+---
+
+## 本实现的真实 API 配置
+
+默认单元测试不访问外部网络；没有密钥时系统会使用本地 deterministic fallback，保证 README 验收可以离线运行。接入真实 API 时使用 OpenAI-compatible 协议：
+
+```powershell
+$env:ONCALL_EMBEDDING_BASE_URL="https://api.siliconflow.cn/v1"
+$env:ONCALL_EMBEDDING_API_KEY="..."
+$env:ONCALL_EMBEDDING_MODEL="Qwen/Qwen3-Embedding-0.6B"
+
+$env:ONCALL_CHAT_BASE_URL="https://your-codex-proxy/v1"
+$env:ONCALL_CHAT_API_KEY="..."
+$env:ONCALL_CHAT_MODEL="..."
+```
+
+配置 `ONCALL_EMBEDDING_API_KEY` 后，`/v2/search` 会在启动时构建 SiliconFlow-backed vector index，并把 embedding 缓存在 `.cache/embeddings.sqlite3`；未配置时自动退回离线 semantic fallback。
+
+如果使用本地 Codex/OpenAI 反代，Codex 自身配置可能写成 `base_url = "http://127.0.0.1:8080"` 且 `wire_api = "responses"`。本项目当前的 Agent 走 Chat Completions tool-calling，因此应用侧应配置到 `/v1`：
+
+```powershell
+$env:ONCALL_CHAT_BASE_URL="http://127.0.0.1:8080/v1"
+$env:ONCALL_CHAT_MODEL="gpt-5.4"
+```
+
+也可以用 `OPENAI_BASE_URL`、`OPENAI_API_KEY`、`OPENAI_MODEL` 作为 Chat Completions 的兼容变量。真实 provider smoke test 是 opt-in 的，避免无意消耗额度：
+
+```powershell
+$env:ONCALL_RUN_INTEGRATION="1"
+python -m unittest tests.integration.test_real_providers -v
+```
+
+不要把真实 API Key 提交到仓库。
+
+## 工程说明
+
+- 架构图与设计取舍见 `docs/ARCHITECTURE.md`
+- 开发记录与面试叙事见 `docs/DEV_LOG.md`
+- 零基础自举学习手册见 `docs/LEARNING_GUIDE.md`
+- 离线评测命令：`python scripts/evaluate.py`

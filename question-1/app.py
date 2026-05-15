@@ -1,14 +1,15 @@
-"""Entry point for the On-Call assistant web application."""
+"""Entry point for the On-Call Copilot web application."""
 
-from pathlib import Path
+import uvicorn
 
-from oncall_app.server import run_server
+from oncall_app.api.app_factory import create_app
+
+app = create_app()
 
 
 def main():
-    """Start the local HTTP server."""
-    project_root = Path(__file__).resolve().parent
-    run_server(project_root / "data")
+    """Start the local development server."""
+    uvicorn.run("app:app", host="127.0.0.1", port=8000, reload=False)
 
 
 if __name__ == "__main__":
