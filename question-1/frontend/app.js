@@ -50,6 +50,120 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
+function renderInlineMarkdown(value) {
+  const codeSpans = [];
+  let rendered = escapeHtml(value).replace(/`([^`]+)`/g, (_match, code) => {
+    const placeholder = `@@CODE_SPAN_${codeSpans.length}@@`;
+    codeSpans.push(`<code>${code}</code>`);
+    return placeholder;
+  });
+
+  rendered = rendered
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/__([^_]+)__/g, "<strong>$1</strong>")
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
+
+  codeSpans.forEach((code, index) => {
+    rendered = rendered.replaceAll(`@@CODE_SPAN_${index}@@`, code);
+  });
+  return rendered;
+}
+
+function renderMarkdown(value) {
+  const lines = String(value || "").replace(/\r\n?/g, "\n").split("\n");
+  const html = [];
+  let paragraph = [];
+  let listType = "";
+  let inCodeBlock = false;
+  let codeLines = [];
+
+  const closeParagraph = () => {
+    if (!paragraph.length) {
+      return;
+    }
+    html.push(`<p>${paragraph.join("<br>")}</p>`);
+    paragraph = [];
+  };
+
+  const closeList = () => {
+    if (!listType) {
+      return;
+    }
+    html.push(`</${listType}>`);
+    listType = "";
+  };
+
+  const openList = (nextListType) => {
+    closeParagraph();
+    if (listType === nextListType) {
+      return;
+    }
+    closeList();
+    listType = nextListType;
+    html.push(`<${listType}>`);
+  };
+
+  lines.forEach((line) => {
+    const trimmed = line.trim();
+    if (trimmed.startsWith("```")) {
+      if (inCodeBlock) {
+        html.push(`<pre><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
+        codeLines = [];
+        inCodeBlock = false;
+      } else {
+        closeParagraph();
+        closeList();
+        inCodeBlock = true;
+      }
+      return;
+    }
+
+    if (inCodeBlock) {
+      codeLines.push(line);
+      return;
+    }
+
+    if (!trimmed) {
+      closeParagraph();
+      closeList();
+      return;
+    }
+
+    const heading = trimmed.match(/^(#{1,4})\s+(.+)$/);
+    if (heading) {
+      closeParagraph();
+      closeList();
+      const level = Math.min(heading[1].length + 2, 5);
+      html.push(`<h${level}>${renderInlineMarkdown(heading[2])}</h${level}>`);
+      return;
+    }
+
+    const unordered = trimmed.match(/^[-*]\s+(.+)$/);
+    if (unordered) {
+      openList("ul");
+      html.push(`<li>${renderInlineMarkdown(unordered[1])}</li>`);
+      return;
+    }
+
+    const ordered = trimmed.match(/^\d+[.)]\s+(.+)$/);
+    if (ordered) {
+      openList("ol");
+      html.push(`<li>${renderInlineMarkdown(ordered[1])}</li>`);
+      return;
+    }
+
+    closeList();
+    paragraph.push(renderInlineMarkdown(trimmed));
+  });
+
+  if (inCodeBlock) {
+    html.push(`<pre><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
+  }
+  closeParagraph();
+  closeList();
+  return html.join("");
+}
+
 function scoreLabel(score) {
   const numeric = Number(score);
   if (!Number.isFinite(numeric)) {
@@ -365,7 +479,7 @@ function renderChatTurn(turn, index) {
   return `
     <article class="chat-message chat-message-assistant" style="--i: ${index}">
       <small>Assistant</small>
-      <pre>${escapeHtml(turn.content || "")}</pre>
+      <div class="markdown-body">${renderMarkdown(turn.content || "")}</div>
       ${renderEvidence(turn.evidence || [])}
     </article>
   `;

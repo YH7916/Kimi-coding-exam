@@ -466,12 +466,91 @@ h1 {
   animation: item-rise 420ms var(--ease-out-quart) both;
 }
 
-pre {
-  margin: 0;
-  white-space: pre-wrap;
+.markdown-body {
   color: var(--text);
-  font: inherit;
+  font-size: 14px;
   line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.markdown-body > *:first-child {
+  margin-top: 0;
+}
+
+.markdown-body > *:last-child {
+  margin-bottom: 0;
+}
+
+.markdown-body p {
+  margin: 0 0 10px;
+}
+
+.markdown-body h3,
+.markdown-body h4,
+.markdown-body h5 {
+  margin: 16px 0 8px;
+  color: var(--text);
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.markdown-body h3 {
+  font-size: 16px;
+}
+
+.markdown-body h4,
+.markdown-body h5 {
+  font-size: 14px;
+}
+
+.markdown-body ul,
+.markdown-body ol {
+  margin: 6px 0 12px;
+  padding-left: 1.35rem;
+}
+
+.markdown-body li {
+  margin: 4px 0;
+  padding-left: 2px;
+}
+
+.markdown-body strong {
+  font-weight: 750;
+}
+
+.markdown-body a {
+  color: var(--text);
+  text-decoration: underline;
+  text-decoration-color: var(--faint);
+  text-underline-offset: 3px;
+}
+
+.markdown-body code {
+  padding: 2px 5px;
+  background: var(--surface-muted);
+  border: 1px solid var(--line-soft);
+  border-radius: 5px;
+  font-family: "Cascadia Code", Consolas, "Courier New", monospace;
+  font-size: 0.92em;
+}
+
+.markdown-body pre {
+  margin: 10px 0 12px;
+  padding: 12px;
+  overflow-x: auto;
+  background: var(--surface-muted);
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  white-space: pre;
+}
+
+.markdown-body pre code {
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  font-size: 13px;
+  line-height: 1.55;
 }
 
 .trace-panel {
