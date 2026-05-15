@@ -98,6 +98,21 @@ class OnCallAssistant:  # pylint: disable=too-few-public-methods
         messages = self._initial_messages(message, retrieval_candidates, history or [])
 
         for _ in range(self.max_tool_rounds):
+            if tool_calls or latest_evidence:
+                try:
+                    yield from _provider_stream_events(
+                        self.chat_client.stream_chat_completion(messages, []),
+                        tool_calls,
+                        retrieval_candidates,
+                    )
+                except Exception as exc:  # pylint: disable=broad-exception-caught
+                    yield from _fallback_stream_events(
+                        latest_evidence,
+                        exc,
+                        tool_calls,
+                        retrieval_candidates,
+                    )
+                return
             try:
                 response = self.chat_client.create_chat_completion(messages, READ_FILE_TOOLS)
             except Exception as exc:  # pylint: disable=broad-exception-caught
@@ -318,6 +333,28 @@ def _done_stream_events(
         payload={
             "response": AgentResponse(
                 answer=answer,
+                tool_calls=tool_calls,
+                retrieval_candidates=retrieval_candidates,
+            )
+        },
+    )
+
+
+def _provider_stream_events(
+    deltas: Iterator[str],
+    tool_calls: list,
+    retrieval_candidates: list[SearchResult],
+) -> Iterator[AgentStreamEvent]:
+    """Forward provider deltas as SSE answer events."""
+    answer_parts = []
+    for delta in deltas:
+        answer_parts.append(delta)
+        yield AgentStreamEvent(type="answer_delta", payload={"delta": delta})
+    yield AgentStreamEvent(
+        type="done",
+        payload={
+            "response": AgentResponse(
+                answer="".join(answer_parts),
                 tool_calls=tool_calls,
                 retrieval_candidates=retrieval_candidates,
             )

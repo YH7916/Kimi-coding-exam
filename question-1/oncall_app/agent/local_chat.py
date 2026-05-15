@@ -1,6 +1,7 @@
 """Local deterministic Chat Completions fallback."""
 
 import re
+from collections.abc import Iterator
 
 from oncall_app.llm.openai_compat import JsonObject
 
@@ -25,6 +26,17 @@ class LocalChatClient:  # pylint: disable=too-few-public-methods
             selected = [fname for fname in selected if fname in candidates] or candidates[:1]
             return _tool_call_response(selected)
         return _answer_response(messages)
+
+    def stream_chat_completion(
+        self,
+        messages: list[JsonObject],
+        tools: list[JsonObject],
+    ) -> Iterator[str]:
+        """Stream the deterministic final answer in small chunks."""
+        response = self.create_chat_completion(messages, tools)
+        content = _response_content(response)
+        for index in range(0, len(content), 12):
+            yield content[index : index + 12]
 
 
 def _last_user_message(messages: list[JsonObject]) -> str:
@@ -139,3 +151,17 @@ def _answer_response(messages: list[JsonObject]) -> JsonObject:
     else:
         content = "请先确认影响范围、查看监控和近期变更，再按相关 SOP 执行处理和升级。"
     return {"choices": [{"message": {"role": "assistant", "content": content}}]}
+
+
+def _response_content(response: JsonObject) -> str:
+    """Extract content from a local Chat Completions response."""
+    choices = response.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return ""
+    first_choice = choices[0]
+    if not isinstance(first_choice, dict):
+        return ""
+    message = first_choice.get("message")
+    if not isinstance(message, dict):
+        return ""
+    return str(message.get("content") or "")

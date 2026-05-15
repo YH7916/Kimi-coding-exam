@@ -1,7 +1,6 @@
 """Chat Completions client interface."""
 
-# pylint: disable=too-few-public-methods
-
+from collections.abc import Iterator
 from typing import Protocol
 
 from oncall_app.llm.config import ProviderConfig, chat_config_from_env
@@ -17,6 +16,13 @@ class ChatClient(Protocol):
         tools: list[JsonObject],
     ) -> JsonObject:
         """Create a Chat Completions response."""
+
+    def stream_chat_completion(
+        self,
+        messages: list[JsonObject],
+        tools: list[JsonObject],
+    ) -> Iterator[str]:
+        """Stream content deltas from a Chat Completions response."""
 
 
 def create_chat_client(config: ProviderConfig | None = None) -> OpenAICompatClient:

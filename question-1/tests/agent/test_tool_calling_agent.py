@@ -19,6 +19,7 @@ class FakeChatClient:
 
     def __init__(self):
         self.calls: list[dict[str, Any]] = []
+        self.stream_calls: list[dict[str, Any]] = []
 
     def create_chat_completion(
         self,
@@ -59,6 +60,16 @@ class FakeChatClient:
             ]
         }
 
+    def stream_chat_completion(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+    ):
+        """Yield final answer chunks like a streaming provider."""
+        self.stream_calls.append({"messages": messages, "tools": tools})
+        yield "服务 OOM "
+        yield "时需要保存堆转储文件。"
+
 
 class TimeoutAfterToolChatClient(FakeChatClient):
     """Fake client that times out while synthesizing the final answer."""
@@ -72,6 +83,15 @@ class TimeoutAfterToolChatClient(FakeChatClient):
         if not self.calls:
             return super().create_chat_completion(messages, tools)
         self.calls.append({"messages": messages, "tools": tools})
+        raise TimeoutError("timed out")
+
+    def stream_chat_completion(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+    ):
+        """Fail like a slow provider while streaming the final answer."""
+        self.stream_calls.append({"messages": messages, "tools": tools})
         raise TimeoutError("timed out")
 
 
@@ -152,6 +172,37 @@ class ToolCallingAgentTest(unittest.TestCase):
         self.assertEqual(messages[current_user_index]["role"], "user")
         self.assertLess(history_user_index, history_assistant_index)
         self.assertLess(history_assistant_index, current_user_index)
+
+    def test_stream_chat_uses_provider_stream_for_final_answer(self):
+        """After reading SOPs, v3 streams answer deltas from the provider."""
+        chat_client = FakeChatClient()
+        assistant = OnCallAssistant(
+            repository=DocumentRepository(DATA_DIR),
+            chat_client=chat_client,
+        )
+
+        events = list(
+            assistant.stream_chat(
+                "服务 OOM 了怎么办？",
+                retrieval_candidates=[
+                    SearchResult(
+                        doc_id="sop-001",
+                        title="后端服务 On-Call SOP",
+                        snippet="单服务 OOM 崩溃",
+                        score=1.0,
+                    )
+                ],
+            )
+        )
+        deltas = [
+            event.payload.get("delta")
+            for event in events
+            if event.type == "answer_delta"
+        ]
+
+        self.assertEqual(deltas, ["服务 OOM ", "时需要保存堆转储文件。"])
+        self.assertEqual(len(chat_client.stream_calls), 1)
+        self.assertEqual(chat_client.stream_calls[0]["tools"], [])
 
     def test_stream_chat_falls_back_when_final_answer_times_out(self):
         """Streaming keeps read evidence instead of turning the whole answer into an error."""

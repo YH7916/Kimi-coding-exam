@@ -32,6 +32,19 @@ class FakeTransport:
             return {"data": [{"embedding": [1.0, 0.0, 0.0]}]}
         return {"choices": [{"message": {"role": "assistant", "content": "ok"}}]}
 
+    def stream_json(
+        self,
+        path: str,
+        payload: dict[str, Any],
+        headers: dict[str, str],
+    ):
+        """Record request data and return OpenAI-compatible stream chunks."""
+        self.last_path = path
+        self.last_payload = payload
+        self.last_headers = headers
+        yield {"choices": [{"delta": {"content": "hel"}}]}
+        yield {"choices": [{"delta": {"content": "lo"}}]}
+
 
 class OpenAICompatClientTest(unittest.TestCase):
     """Client builds correct OpenAI-compatible requests."""
@@ -70,6 +83,26 @@ class OpenAICompatClientTest(unittest.TestCase):
         self.assertEqual(transport.last_payload["messages"][0]["content"], "hi")
         self.assertEqual(transport.last_payload["tools"], [])
         self.assertEqual(result["choices"][0]["message"]["content"], "ok")
+
+    def test_chat_stream_request_uses_streaming_endpoint(self):
+        """Streaming chat calls use stream=true and yield provider deltas."""
+        transport = FakeTransport()
+        client = OpenAICompatClient(
+            ProviderConfig(base_url="https://example.test/v1", api_key="key", model="chat"),
+            transport=transport,
+        )
+
+        chunks = list(
+            client.stream_chat_completion(
+                [{"role": "user", "content": "hi"}],
+                tools=[],
+            )
+        )
+
+        self.assertEqual(transport.last_path, "/chat/completions")
+        self.assertEqual(transport.last_payload["model"], "chat")
+        self.assertTrue(transport.last_payload["stream"])
+        self.assertEqual(chunks, ["hel", "lo"])
 
     def test_chat_config_uses_longer_default_timeout(self):
         """Chat synthesis has more time than short embedding requests."""
