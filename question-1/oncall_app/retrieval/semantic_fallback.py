@@ -82,6 +82,7 @@ def semantic_fallback_search(
                 title=document.title,
                 snippet=_best_snippet_for_terms(document, terms),
                 score=round(score, 2),
+                section_heading=_best_section_heading_for_terms(document, terms),
             )
         )
     return sorted(results, key=lambda result: (-result.score, result.doc_id))[:limit]
@@ -141,3 +142,41 @@ def _make_snippet(document: Document, query: str) -> str:
             suffix = "..." if end < len(source) else ""
             return f"{prefix}{source[start:end]}{suffix}"
     return document.text[: SNIPPET_RADIUS * 2]
+
+
+def _best_section_heading_for_terms(document: Document, terms: list[str]) -> str:
+    """Return the structured section that matched the semantic fallback terms."""
+    if not document.sections:
+        return ""
+    heading = _matching_section_heading(document, terms)
+    if heading:
+        return heading
+    heading = _matching_section_text(document, terms)
+    if heading:
+        return heading
+    return document.sections[0].heading
+
+
+def _matching_section_heading(document: Document, terms: list[str]) -> str:
+    """Return the first section heading matched by semantic terms."""
+    for term in terms:
+        folded_term = _casefold(term).strip()
+        if not folded_term:
+            continue
+        for section in document.sections:
+            if folded_term in _casefold(section.heading):
+                return section.heading
+    return ""
+
+
+def _matching_section_text(document: Document, terms: list[str]) -> str:
+    """Return the first section body matched by semantic terms."""
+    for term in terms:
+        folded_term = _casefold(term).strip()
+        if not folded_term:
+            continue
+        for section in document.sections:
+            if folded_term in _casefold(section.text):
+                return section.heading
+    return ""
+

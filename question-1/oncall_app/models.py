@@ -33,6 +33,7 @@ class SearchResult:
     title: str
     snippet: str
     score: float
+    section_heading: str = ""
 
 
 @dataclass(frozen=True)

@@ -3,8 +3,9 @@
 import unittest
 from pathlib import Path
 
-from oncall_app.agent.evidence import EvidenceExtractor
+from oncall_app.agent.evidence import MAX_EVIDENCE, EvidenceExtractor
 from oncall_app.documents.repository import DocumentRepository
+from oncall_app.models import Document, Section
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = PROJECT_ROOT / "data"
@@ -37,6 +38,25 @@ class EvidenceExtractorTest(unittest.TestCase):
         files = {item.file for item in evidence}
 
         self.assertGreaterEqual(len(files), 2)
+
+    def test_extract_limits_relevant_sections(self):
+        """Evidence extraction keeps evidence volume bounded for the UI and prompt."""
+        sections = [
+            Section(heading=f"场景 {index}", level=2, text="oom 处理 升级")
+            for index in range(MAX_EVIDENCE + 2)
+        ]
+        document = Document(
+            doc_id="sop-many",
+            title="Many Sections",
+            text="",
+            html="",
+            file_name="sop-many.html",
+            sections=sections,
+        )
+
+        evidence = EvidenceExtractor().extract("oom 处理", [document])
+
+        self.assertEqual(len(evidence), MAX_EVIDENCE)
 
 
 if __name__ == "__main__":

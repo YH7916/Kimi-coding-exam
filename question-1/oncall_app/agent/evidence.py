@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from oncall_app.models import Document, Section
 from oncall_app.retrieval.tokenize import tokenize
 
-MAX_EVIDENCE = 5
+MAX_EVIDENCE = 6
 ESCALATION_TERMS = ("p0", "升级", "响应流程", "oom", "怎么办", "处理")
 
 

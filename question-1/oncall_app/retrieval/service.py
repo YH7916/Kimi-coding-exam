@@ -106,6 +106,7 @@ class RetrievalService:
                     title=document.title,
                     snippet=_make_snippet(document, query, query_tokens),
                     score=round(score, 4),
+                    section_heading=_best_section_heading(document, [query, *query_tokens]),
                 )
             )
         return results
@@ -180,6 +181,7 @@ class RetrievalService:
                     + _section_heading_bonus(self._documents_by_id[item.doc_id], query_terms),
                     4,
                 ),
+                section_heading=result_by_id[item.doc_id].section_heading,
             )
             for item in ranked[:limit]
         ]
@@ -217,6 +219,7 @@ class RetrievalService:
                 title=item.document.title,
                 snippet=_chunk_snippet(item.best_chunk),
                 score=round(item.score, 4),
+                section_heading=item.best_chunk.section_heading,
             )
             for item in ranked[:limit]
         ]
@@ -245,6 +248,43 @@ def _chunk_snippet(chunk: DocumentChunk) -> str:
     """Build a snippet from the best vector chunk."""
     snippet = chunk.text.replace("\n", " ")
     return snippet[: SNIPPET_RADIUS * 2]
+
+
+def _best_section_heading(document: Document, candidates: list[str]) -> str:
+    """Return the section heading that best explains a document-level hit."""
+    if not document.sections:
+        return ""
+    heading = _matching_section_heading(document, candidates)
+    if heading:
+        return heading
+    heading = _matching_section_text(document, candidates)
+    if heading:
+        return heading
+    return document.sections[0].heading
+
+
+def _matching_section_heading(document: Document, candidates: list[str]) -> str:
+    """Return the first heading match for candidate terms."""
+    for candidate in candidates:
+        folded_candidate = candidate.casefold().strip()
+        if not folded_candidate:
+            continue
+        for section in document.sections:
+            if folded_candidate in section.heading.casefold():
+                return section.heading
+    return ""
+
+
+def _matching_section_text(document: Document, candidates: list[str]) -> str:
+    """Return the first section whose body matches candidate terms."""
+    for candidate in candidates:
+        folded_candidate = candidate.casefold().strip()
+        if not folded_candidate:
+            continue
+        for section in document.sections:
+            if folded_candidate in section.text.casefold():
+                return section.heading
+    return ""
 
 
 def _query_terms(query: str) -> set[str]:

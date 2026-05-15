@@ -17,7 +17,21 @@ class FrontendStaticTest(unittest.TestCase):
         """The frontend lives outside backend route modules."""
         for name in ("index.html", "app.js", "styles.css"):
             self.assertTrue((PROJECT_ROOT / "frontend" / name).is_file())
-        for name in ("api.js", "config.js", "format.js", "markdown.js", "sse.js", "storage.js"):
+        for name in (
+            "api.js",
+            "chatView.js",
+            "config.js",
+            "evidence.js",
+            "format.js",
+            "markdown.js",
+            "providerStatus.js",
+            "searchResults.js",
+            "shellView.js",
+            "sopPreview.js",
+            "sse.js",
+            "storage.js",
+            "trace.js",
+        ):
             self.assertTrue((PROJECT_ROOT / "frontend" / "app" / name).is_file())
         self.assertTrue((PROJECT_ROOT / "frontend" / "assets" / "settings-2.svg").is_file())
 
@@ -61,16 +75,28 @@ class FrontendStaticTest(unittest.TestCase):
         self.assertIn("chat-screen", js)
         self.assertIn("/documents/", js)
         self.assertIn("openSopModal", js)
+        self.assertIn('data-sop-section="${escapeHtml(item.section || "")}"', js)
+        self.assertIn("setupEvidenceCarousel", js)
+        self.assertIn("const hasScrollableEvidence = cards.length > 3;", js)
+        self.assertIn("data-evidence-direction", js)
+        self.assertIn("data-evidence-pagebar", js)
+        self.assertIn("scrollEvidenceStrip", js)
+        self.assertIn("evidenceActiveDotIndex", js)
         self.assertIn("data-sop-id", js)
         self.assertIn("data-sop-section", js)
         self.assertIn("evidence-section", js)
 
-    def test_v3_evidence_cards_use_three_column_grid(self):
-        """V3 evidence cards are rendered as a compact SOP grid."""
+    def test_v3_evidence_cards_use_scroll_carousel(self):
+        """V3 evidence cards render as a compact horizontal carousel."""
         css = (PROJECT_ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
 
+        self.assertIn(".evidence-carousel", css)
         self.assertIn(".evidence-strip", css)
-        self.assertIn("grid-template-columns: repeat(3, minmax(0, 1fr));", css)
+        self.assertIn("--evidence-visible: 3;", css)
+        self.assertIn("scroll-snap-type: x mandatory;", css)
+        self.assertIn(".evidence-nav-button", css)
+        self.assertIn(".evidence-pagebar", css)
+        self.assertIn("width: 18px;", css)
         self.assertIn("-webkit-line-clamp: 2;", css)
 
     def test_markdown_styles_support_readable_hierarchy(self):

@@ -18,6 +18,7 @@ class SearchResultItem(BaseModel):
     title: str
     snippet: str
     score: float
+    section: str = ""
 
 
 class SearchResponse(BaseModel):
@@ -143,6 +144,7 @@ def search_response(query: str, results: list[SearchResult]) -> SearchResponse:
                 title=result.title,
                 snippet=result.snippet,
                 score=result.score,
+                section=_compact_text(result.section_heading, MAX_EVIDENCE_HEADING_CHARS),
             )
             for result in results
         ],

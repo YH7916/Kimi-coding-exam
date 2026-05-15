@@ -1,12 +1,21 @@
+import { fetchProviderStatus, fetchSearchResults, streamChat } from "./app/api.js";
 import {
-  fetchDocumentDetail,
-  fetchProviderStatus,
-  fetchSearchResults,
-  streamChat,
-} from "./app/api.js";
+  renderAssistantBody,
+  renderChatConversation as renderChatConversationMarkup,
+} from "./app/chatView.js";
 import { MAX_HISTORY_ENTRIES, MODES, modeFromPath } from "./app/config.js";
-import { scoreLabel, sectionKey, sopIdFromFile } from "./app/format.js";
-import { escapeHtml, renderMarkdown } from "./app/markdown.js";
+import { setupEvidenceCarousel } from "./app/evidence.js";
+import { escapeHtml } from "./app/markdown.js";
+import { renderProviderStatus } from "./app/providerStatus.js";
+import { renderSearchResults } from "./app/searchResults.js";
+import {
+  renderChatShell,
+  renderHistorySidebar,
+  renderHomeShell,
+  renderSettingsSidebar,
+  renderWorkspaceShell,
+} from "./app/shellView.js";
+import { setupSopPreview } from "./app/sopPreview.js";
 import {
   compactHistoryTitle,
   createHistoryId,
@@ -124,71 +133,6 @@ async function refreshProviderStatus() {
   }
 }
 
-function renderProviderStatus(status) {
-  const summary = document.querySelector("#settings-summary");
-  const details = document.querySelector("#provider-status-details");
-  const button = document.querySelector("#settings-button");
-  if (!summary || !details || !button) {
-    return;
-  }
-
-  if (!status) {
-    summary.textContent = "状态不可用";
-    details.innerHTML = `<p>状态暂时不可用。</p>`;
-    return;
-  }
-
-  const embeddingMode = status.embedding?.mode || "fallback";
-  const chatMode = status.chat?.mode || "fallback";
-  const isAllReal = embeddingMode === "real" && chatMode === "real";
-  button.title = isAllReal ? "模型服务已连接" : "部分能力使用本地模式";
-  summary.textContent = isAllReal ? "模型服务已连接" : "部分本地模式";
-  details.innerHTML = `
-    ${renderProviderRow("向量检索", status.embedding, "SiliconFlow Embedding")}
-    ${renderProviderRow("对话模型", status.chat, "OpenAI Chat Completions")}
-    ${renderCacheRow(status.cache || {})}
-  `;
-}
-
-function renderProviderRow(label, item, realLabel) {
-  const mode = item?.mode || "fallback";
-  const isReal = mode === "real";
-  const model = item?.model ? `<small>${escapeHtml(item.model)}</small>` : "";
-  return `
-    <article class="provider-row">
-      <div>
-        <strong>${escapeHtml(label)}</strong>
-        <span>${escapeHtml(isReal ? realLabel : "本地兜底")}</span>
-        ${model}
-      </div>
-      <mark class="${isReal ? "is-real" : ""}">${isReal ? "已连接" : "本地"}</mark>
-    </article>
-  `;
-}
-
-function renderCacheRow(cache) {
-  if (!cache.enabled) {
-    return `
-      <article class="provider-row">
-        <div>
-          <strong>向量缓存</strong>
-          <span>当前未启用</span>
-        </div>
-        <mark>关闭</mark>
-      </article>
-    `;
-  }
-  return `
-    <article class="provider-row">
-      <div>
-        <strong>向量缓存</strong>
-        <span>${escapeHtml(cache.entries || 0)} 条向量，命中 ${escapeHtml(cache.hits || 0)} 次</span>
-      </div>
-      <mark class="is-real">开启</mark>
-    </article>
-  `;
-}
-
 function setActiveNav() {
   const switcher = document.querySelector(".version-switcher");
   if (switcher) {
@@ -242,7 +186,7 @@ function applyHistorySidebarState() {
     sidebar.setAttribute("aria-hidden", String(!userSettings.historyOpen));
     if (userSettings.historyOpen) {
       sidebar.removeAttribute("inert");
-      sidebar.innerHTML = renderHistorySidebar();
+      sidebar.innerHTML = renderHistorySidebar(historyEntries, activeHistoryId);
     } else {
       sidebar.setAttribute("inert", "");
     }
@@ -262,7 +206,7 @@ function applySettingsSidebarState() {
     sidebar.setAttribute("aria-hidden", String(!userSettings.settingsOpen));
     if (userSettings.settingsOpen) {
       sidebar.removeAttribute("inert");
-      sidebar.innerHTML = renderSettingsSidebar();
+      sidebar.innerHTML = renderSettingsSidebar(userSettings);
       bindSettingsControls();
       refreshProviderStatus();
     } else {
@@ -445,7 +389,12 @@ function renderShell() {
   document.body.classList.toggle("chat-active", activeChat);
   document.body.classList.toggle("history-open", userSettings.historyOpen);
   document.body.classList.toggle("settings-open", userSettings.settingsOpen);
-  app.innerHTML = renderWorkspaceShell(activeChat ? renderChatShell() : renderHomeShell());
+  app.innerHTML = renderWorkspaceShell({
+    activeHistoryId,
+    content: activeChat ? renderChatShell(config) : renderHomeShell(config),
+    historyEntries,
+    userSettings,
+  });
   syncHistoryButtonState();
   syncSettingsButtonState();
   bindSettingsControls();
@@ -502,148 +451,11 @@ function renderShell() {
   }
 }
 
-function renderWorkspaceShell(content) {
-  return `
-    <div class="workspace-shell ${userSettings.historyOpen ? "is-history-open" : ""} ${userSettings.settingsOpen ? "is-settings-open" : ""}">
-      <div
-        class="side-panel-backdrop"
-        ${userSettings.historyOpen || userSettings.settingsOpen ? "" : "hidden"}
-        data-panel-dismiss
-      ></div>
-      <aside
-        id="history-sidebar"
-        class="side-panel history-sidebar"
-        aria-label="聊天记录"
-        aria-hidden="${userSettings.historyOpen ? "false" : "true"}"
-        ${userSettings.historyOpen ? "" : "inert"}
-      >
-        ${renderHistorySidebar()}
-      </aside>
-      <aside
-        id="settings-sidebar"
-        class="side-panel settings-sidebar"
-        aria-label="运行设置"
-        aria-hidden="${userSettings.settingsOpen ? "false" : "true"}"
-        ${userSettings.settingsOpen ? "" : "inert"}
-      >
-        ${renderSettingsSidebar()}
-      </aside>
-      <div class="workspace-main">
-        ${content}
-      </div>
-    </div>
-  `;
-}
-
-function renderHistorySidebar() {
-  const entries = historyEntries.slice(0, MAX_HISTORY_ENTRIES);
-  const emptyState = `
-    <p class="history-empty">还没有记录。搜索或提问后会自动出现在这里。</p>
-  `;
-
-  return `
-    <div class="history-sidebar-header">
-      <span>聊天记录</span>
-    </div>
-    <div class="history-list">
-      ${
-        entries.length
-          ? entries.map((entry, index) => renderHistoryEntry(entry, index)).join("")
-          : emptyState
-      }
-    </div>
-  `;
-}
-
-function renderSettingsSidebar() {
-  return `
-    <div class="side-panel-header">
-      <span>运行状态</span>
-      <small id="settings-summary">正在检查</small>
-    </div>
-    <div id="provider-status-details" class="provider-status-details">
-      <p>正在加载运行状态...</p>
-    </div>
-    <div class="settings-group">
-      <span>界面</span>
-      <label>
-        <input id="setting-show-trace" type="checkbox" ${userSettings.showTrace ? "checked" : ""}>
-        显示工具调用过程
-      </label>
-      <label>
-        <input id="setting-section-jump" type="checkbox" ${userSettings.sectionJump ? "checked" : ""}>
-        打开 SOP 时定位引用章节
-      </label>
-    </div>
-  `;
-}
-
 function refreshHistorySidebar() {
   const sidebar = document.querySelector("#history-sidebar");
   if (sidebar && userSettings.historyOpen) {
-    sidebar.innerHTML = renderHistorySidebar();
+    sidebar.innerHTML = renderHistorySidebar(historyEntries, activeHistoryId);
   }
-}
-
-function renderHistoryEntry(entry, index) {
-  const isCurrent = entry.id === activeHistoryId;
-  return `
-    <article class="history-entry ${isCurrent ? "is-current" : ""}" style="--i: ${index}">
-      <button
-        type="button"
-        class="history-entry-load"
-        data-history-id="${escapeHtml(entry.id)}"
-      >
-        <span class="history-mode-tag">${escapeHtml(entry.mode)}</span>
-        <span class="history-entry-title">${escapeHtml(entry.title)}</span>
-      </button>
-      <button
-        type="button"
-        class="history-delete-button"
-        data-history-delete-id="${escapeHtml(entry.id)}"
-        aria-label="删除 ${escapeHtml(entry.title)}"
-      >
-        <img src="/static/assets/trash-2.svg" alt="" aria-hidden="true">
-      </button>
-    </article>
-  `;
-}
-
-function renderHomeShell() {
-  return `
-    <section class="home">
-      <p class="kicker">${escapeHtml(config.kicker)}</p>
-      <h1>${escapeHtml(config.title)}</h1>
-      <p class="subtitle">${escapeHtml(config.subtitle)}</p>
-      <form id="query-form" class="query-box">
-        <textarea name="q" rows="1" placeholder="${escapeHtml(config.placeholder)}" autofocus></textarea>
-        <button class="send-button" type="submit" aria-label="Submit query">
-          <svg aria-hidden="true" viewBox="0 0 24 24">
-            <path d="M12 19V5"></path>
-            <path d="m5 12 7-7 7 7"></path>
-          </svg>
-        </button>
-      </form>
-    </section>
-    <section id="results" class="results" aria-label="${escapeHtml(config.resultTitle)}"></section>
-  `;
-}
-
-function renderChatShell() {
-  return `
-    <section class="chat-screen">
-      <section id="results" class="results chat-results" aria-label="${escapeHtml(config.resultTitle)}"></section>
-      <form id="query-form" class="query-box chat-composer">
-        <textarea name="q" rows="1" placeholder="继续追问 SOP，或要求展开某个步骤" autofocus></textarea>
-        <button class="send-button" type="submit" aria-label="Submit query">
-          <svg aria-hidden="true" viewBox="0 0 24 24">
-            <path d="M12 19V5"></path>
-            <path d="m5 12 7-7 7 7"></path>
-          </svg>
-        </button>
-      </form>
-    </section>
-  `;
 }
 
 function renderLoading(label) {
@@ -668,7 +480,7 @@ async function submitSearch(q, options = {}) {
   renderLoading(mode === "v1" ? "Searching keywords" : "Retrieving evidence");
   try {
     const payload = await fetchSearchResults(config.endpoint, q);
-    renderSearchResults(payload.results || []);
+    renderSearchResults(payload.results || [], config.resultTitle);
     if (options.record !== false) {
       recordSearchHistory(q);
       refreshHistorySidebar();
@@ -677,43 +489,6 @@ async function submitSearch(q, options = {}) {
   } catch (error) {
     renderError(error.message || "Unknown error");
   }
-}
-
-function renderSearchResults(results) {
-  const displayedResults = results.slice(0, 3);
-  const empty = `
-    <article class="notice-card result-enter">
-      <strong>No matching SOP found</strong>
-      <p>Try a concrete incident keyword such as OOM, CDN, P0, 黑客攻击, or 模型。</p>
-    </article>
-  `;
-
-  document.querySelector("#results").innerHTML = `
-    <div class="section-heading result-enter">
-      <h2>${escapeHtml(config.resultTitle)}</h2>
-      <span>${displayedResults.length ? `${displayedResults.length} shown` : "empty"}</span>
-    </div>
-    <div class="result-list">
-      ${
-        displayedResults.length
-          ? displayedResults
-              .map(
-                (item, index) => `
-                  <button type="button" class="result-row sop-open-button" data-sop-id="${escapeHtml(item.id)}" style="--i: ${index}">
-                    <span class="result-index">${index + 1}</span>
-                    <div>
-                      <h3>${escapeHtml(item.title)}</h3>
-                      <p>${escapeHtml(item.snippet)}</p>
-                      <small>${escapeHtml(item.id)} · score ${escapeHtml(scoreLabel(item.score))}</small>
-                    </div>
-                  </button>
-                `,
-              )
-              .join("")
-          : empty
-      }
-    </div>
-  `;
 }
 
 async function submitChat(message) {
@@ -880,15 +655,10 @@ function streamingPlaceholder(turn) {
 }
 
 function renderChatConversation() {
-  document.querySelector("#results").innerHTML = `
-    <div class="agent-layout chat-agent-layout result-enter">
-      <section class="answer-panel chat-thread-panel">
-        <div class="chat-list">
-          ${chatTurns.map((turn, index) => renderChatTurn(turn, index)).join("")}
-        </div>
-      </section>
-    </div>
-  `;
+  document.querySelector("#results").innerHTML = renderChatConversationMarkup(chatTurns, {
+    placeholderForTurn: streamingPlaceholder,
+    showTrace: userSettings.showTrace,
+  });
 }
 
 function scheduleAssistantContentUpdate(turn) {
@@ -922,303 +692,15 @@ function updateAssistantContent(turn) {
     renderChatConversation();
     return;
   }
-  body.innerHTML = renderAssistantBody(turn);
-}
-
-function renderChatTurn(turn, index) {
-  if (turn.role === "pending") {
-    return `
-      <div class="loading-row chat-loading" style="--i: ${index}">
-        <span class="spinner" aria-hidden="true"></span>
-        <span>${escapeHtml(turn.content)}</span>
-      </div>
-    `;
-  }
-  if (turn.role === "error") {
-    return `
-      <article class="notice-card chat-message" style="--i: ${index}">
-        <strong>Request failed</strong>
-        <p>${escapeHtml(turn.content)}</p>
-      </article>
-    `;
-  }
-  if (turn.role === "user") {
-    return `
-      <article class="chat-message chat-message-user" style="--i: ${index}">
-        <p>${escapeHtml(turn.content)}</p>
-      </article>
-    `;
-  }
-  return `
-    <article class="chat-message chat-message-assistant" data-turn-index="${index}" style="--i: ${index}">
-      ${renderInlineTrace(turn)}
-      <div class="markdown-body">${renderAssistantBody(turn)}</div>
-      ${renderEvidence(turn.evidence || [])}
-    </article>
-  `;
-}
-
-function renderAssistantBody(turn) {
-  return `
-    ${
-      turn.content
-        ? renderMarkdown(turn.content)
-        : `<p class="stream-placeholder">${escapeHtml(streamingPlaceholder(turn))}</p>`
-    }
-    ${turn.streaming ? `<span class="stream-cursor" aria-hidden="true"></span>` : ""}
-  `;
-}
-
-function renderInlineTrace(turn) {
-  const trace = userSettings.showTrace ? turn.trace || [] : [];
-  if (!trace.length) {
-    return "";
-  }
-  const toolCallCount = (turn.toolCalls || []).length;
-  const hasEvidence = (turn.evidence || []).length > 0;
-  if (!toolCallCount && !hasEvidence && turn.streaming) {
-    return "";
-  }
-  const visibleTrace = trace.filter((item) => item.type !== "answer").slice(0, 4);
-  if (!visibleTrace.length && !toolCallCount) {
-    return "";
-  }
-  const workflowSteps = [
-    ...visibleTrace.map((item) => ({
-      label: compactTraceType(item.type),
-      message: compactTraceMessage(item.message),
-    })),
-  ];
-  if (turn.content || turn.streaming) {
-    workflowSteps.push({
-      label: "输出",
-      message: turn.streaming ? "正在生成回答" : "回答已生成",
-    });
-  }
-  return `
-    <section class="inline-trace" aria-label="工具调用过程">
-      <div class="inline-trace-header">
-        <span>过程</span>
-        <small>${toolCallCount ? `${toolCallCount} 次 readFile` : "检索完成"}</small>
-      </div>
-      <ol class="inline-trace-list">
-        ${workflowSteps.map((item, index) => `
-          <li class="inline-trace-step ${turn.streaming && index === workflowSteps.length - 1 ? "is-active" : ""}" style="--i: ${index}">
-            <span class="inline-trace-dot" aria-hidden="true"></span>
-            <div>
-              <strong>${escapeHtml(item.label)}</strong>
-              <p>${escapeHtml(item.message)}</p>
-            </div>
-          </li>
-        `).join("")}
-      </ol>
-    </section>
-  `;
-}
-
-function compactTraceType(type) {
-  if (type === "tool_call") {
-    return "readFile";
-  }
-  if (type === "retrieval") {
-    return "检索";
-  }
-  if (type === "observation") {
-    return "读取";
-  }
-  if (type === "evidence") {
-    return "证据";
-  }
-  if (type === "warning") {
-    return "提示";
-  }
-  if (type === "error") {
-    return "错误";
-  }
-  return String(type || "trace");
-}
-
-function compactTraceMessage(message) {
-  return String(message || "")
-    .replace("v2 hybrid retrieval candidates: ", "")
-    .replace(" cited sections extracted", " sections")
-    .replace(" loaded", "");
-}
-
-function renderEvidence(evidence) {
-  if (!evidence.length) {
-    return "";
-  }
-  const cards = evidence.slice(0, 6);
-  return `
-    <section class="evidence-section" aria-label="引用 SOP">
-      <div class="evidence-section-header">
-        <span>引用 SOP</span>
-        <small>${cards.length} 条</small>
-      </div>
-      <div class="evidence-strip">
-        ${cards.map((item, index) => `
-        <button
-          type="button"
-          class="evidence-card sop-open-button"
-          data-sop-id="${escapeHtml(sopIdFromFile(item.file))}"
-          data-sop-section="${escapeHtml(item.section)}"
-          style="--i: ${index}"
-        >
-          <small>${escapeHtml(item.file)}</small>
-          <h3>${escapeHtml(item.section)}</h3>
-          <p>${escapeHtml(item.text)}</p>
-        </button>
-        `).join("")}
-      </div>
-    </section>
-  `;
-}
-
-function setupSopPreview() {
-  app.addEventListener("click", (event) => {
-    if (!(event.target instanceof Element)) {
-      return;
-    }
-    const trigger = event.target.closest("[data-sop-id]");
-    if (!trigger) {
-      return;
-    }
-    event.preventDefault();
-    openSopModal(trigger.dataset.sopId || "", trigger.dataset.sopSection || "");
-  });
-
-  document.addEventListener("click", (event) => {
-    if (!(event.target instanceof Element)) {
-      return;
-    }
-    if (event.target.matches("[data-modal-close]")) {
-      closeSopModal();
-    }
-  });
-
-  document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") {
-      closeSopModal();
-    }
-  });
-}
-
-async function openSopModal(rawId, targetSection = "") {
-  const docId = sopIdFromFile(rawId);
-  if (!docId) {
-    return;
-  }
-  renderSopModal(`
-    <header class="sop-modal-header">
-      <div>
-        <p>SOP preview</p>
-        <h2 id="sop-modal-title">${escapeHtml(docId)}.html</h2>
-      </div>
-      <button type="button" class="sop-modal-close" data-modal-close aria-label="Close preview">×</button>
-    </header>
-    <div class="sop-modal-status">
-      <span class="spinner" aria-hidden="true"></span>
-      <span>Loading source</span>
-    </div>
-  `);
-
-  try {
-    const documentDetail = await fetchDocumentDetail(docId);
-    renderSopModal(renderSopDocument(documentDetail, targetSection));
-    scrollToSopSection(targetSection);
-  } catch (error) {
-    renderSopModal(`
-      <header class="sop-modal-header">
-        <div>
-          <p>SOP preview</p>
-          <h2 id="sop-modal-title">Unable to open ${escapeHtml(docId)}.html</h2>
-        </div>
-        <button type="button" class="sop-modal-close" data-modal-close aria-label="Close preview">×</button>
-      </header>
-      <div class="sop-modal-body">
-        <article class="notice-card">
-          <strong>Request failed</strong>
-          <p>${escapeHtml(error.message || "Unknown error")}</p>
-        </article>
-      </div>
-    `);
-  }
-}
-
-function renderSopModal(innerHtml) {
-  let root = document.querySelector("#sop-modal-root");
-  if (!root) {
-    root = document.createElement("div");
-    root.id = "sop-modal-root";
-    document.body.append(root);
-  }
-  root.innerHTML = `
-    <div class="sop-modal-backdrop" data-modal-close></div>
-    <section class="sop-modal" role="dialog" aria-modal="true" aria-labelledby="sop-modal-title">
-      ${innerHtml}
-    </section>
-  `;
-  document.body.classList.add("modal-open");
-  root.querySelector(".sop-modal-close")?.focus();
-}
-
-function renderSopDocument(documentDetail, targetSection = "") {
-  const targetKey = userSettings.sectionJump ? sectionKey(targetSection) : "";
-  const sections = (documentDetail.sections || [])
-    .filter((section) => String(section.text || "").trim())
-    .map((section) => `
-      <section
-        class="sop-full-section${targetKey && sectionKey(section.heading) === targetKey ? " is-target" : ""}"
-        data-section-key="${escapeHtml(sectionKey(section.heading))}"
-      >
-        <h3>${escapeHtml(section.heading || documentDetail.title)}</h3>
-        <p>${escapeHtml(section.text)}</p>
-      </section>
-    `)
-    .join("");
-
-  return `
-    <header class="sop-modal-header">
-      <div>
-        <p>${escapeHtml(documentDetail.file)}</p>
-        <h2 id="sop-modal-title">${escapeHtml(documentDetail.title)}</h2>
-      </div>
-      <button type="button" class="sop-modal-close" data-modal-close aria-label="Close preview">×</button>
-    </header>
-    <div class="sop-modal-body">
-      ${sections || `<p>${escapeHtml(documentDetail.text || "")}</p>`}
-    </div>
-  `;
-}
-
-function scrollToSopSection(targetSection) {
-  if (!userSettings.sectionJump) {
-    return;
-  }
-  const key = sectionKey(targetSection);
-  if (!key) {
-    return;
-  }
-  requestAnimationFrame(() => {
-    const target = document.querySelector(`[data-section-key="${CSS.escape(key)}"]`);
-    target?.scrollIntoView({ block: "start", behavior: "smooth" });
-  });
-}
-
-function closeSopModal() {
-  const root = document.querySelector("#sop-modal-root");
-  if (root) {
-    root.remove();
-  }
-  document.body.classList.remove("modal-open");
+  body.innerHTML = renderAssistantBody(turn, streamingPlaceholder);
 }
 
 setupNavigation();
 setupHistoryButton();
 setupHistorySidebar();
 setupSettingsPopover();
-setupSopPreview();
+setupEvidenceCarousel(app);
+setupSopPreview(app, () => userSettings);
 setActiveNav();
 renderShell();
 refreshProviderStatus();

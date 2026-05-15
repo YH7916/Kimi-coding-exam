@@ -20,6 +20,8 @@ export default [
         CSS: "readonly",
         Element: "readonly",
         FormData: "readonly",
+        HTMLButtonElement: "readonly",
+        HTMLElement: "readonly",
         TextDecoder: "readonly",
         document: "readonly",
         fetch: "readonly",
