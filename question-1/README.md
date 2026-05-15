@@ -1,163 +1,165 @@
-# 编程面试：On-Call 助手
+# On-Call Assistant
 
-## 概述
+这是题目一的实现：一个基于部门 On-Call SOP 文档的 Web 助手，包含关键词搜索、语义检索和带工具调用过程展示的 Agent 对话。
 
-构建一个 On-Call 助手 Web 应用。`data/` 目录下有 100 份部门 On-Call SOP 的 HTML 文档（demo 提供 10 份）。
+## 已实现功能
 
-- 编程语言不限
-- 可以使用任何 AI 工具辅助
-- 需要实现 HTTP API + 前端页面
-- 本题分为三个阶段，每阶段实现为独立的路由前缀（`/v1`、`/v2`、`/v3`）
-- 建议按顺序完成，每阶段只有完整实现才得分
+| 阶段 | 路由 | 实现 |
+| ---- | ---- | ---- |
+| Phase 1 | `/v1`、`/v1/search`、`/v1/documents` | 解析 HTML 可见文本，使用 BM25/关键词检索，忽略 `script` 等不可见内容 |
+| Phase 2 | `/v2`、`/v2/search` | SOP section chunking + embedding vector store + BM25/RRF hybrid retrieval；无密钥时自动使用离线 semantic fallback |
+| Phase 3 | `/v3`、`/v3/chat` | OpenAI-compatible Chat Completions tool-calling Agent，只通过 `readFile(fname)` 读取 SOP，并在前端展示工具调用、证据和引用 |
 
-| 阶段                       | 分值 |
-| -------------------------- | ---- |
-| Phase 1：搜索引擎          | 30   |
-| Phase 2：语义搜索          | 30   |
-| Phase 3：On-Call 助手 Agent | 40   |
+前端是纯静态页面，由 FastAPI 托管，三个阶段共享同一个产品化界面，可以在顶部切换 `v1 Search`、`v2 RAG` 和 `v3 Agent`。
 
----
+## 目录结构
 
-## 测试数据
+```text
+question-1/
+├── app.py                    # FastAPI 启动入口
+├── data/                     # 10 份 demo SOP HTML
+├── frontend/                 # 静态前端页面和 ES module 组件
+├── oncall_app/
+│   ├── api/                  # 路由、schema、静态文件托管
+│   ├── agent/                # tool-calling loop、readFile 工具、证据抽取
+│   ├── documents/            # HTML 解析、SOP repository、section 抽取
+│   ├── evaluation/           # README 验收用 evaluation cases 和 metrics
+│   ├── llm/                  # OpenAI-compatible embedding/chat clients
+│   └── retrieval/            # BM25、chunking、vector store、hybrid retrieval
+├── scripts/evaluate.py       # 离线验收脚本
+├── tests/                    # 单元测试、API 测试、检索测试、集成 smoke test
+├── requirements.txt
+├── requirements-dev.txt
+├── package.json
+└── pyproject.toml
+```
 
-| 文件           | 部门       | 关键内容                                     |
-| -------------- | ---------- | -------------------------------------------- |
-| `sop-001.html` | 后端服务   | OOM 排查、服务超时、降级策略、故障分级       |
-| `sop-002.html` | 数据库 DBA | 主从延迟、慢查询、连接池满、数据恢复         |
-| `sop-003.html` | 前端       | 页面白屏、CDN 资源加载失败、兼容性、性能劣化 |
-| `sop-004.html` | SRE        | K8s 集群问题、监控告警、容量规划、故障响应   |
-| `sop-005.html` | 安全团队   | 安全事件分级、入侵检测、漏洞响应             |
-| `sop-006.html` | 数据平台   | 数据管道故障、ETL 失败、Spark 集群           |
-| `sop-007.html` | 移动端     | App 崩溃率、热修复、推送服务                 |
-| `sop-008.html` | AI & 算法  | 模型推理延迟、推荐质量下降、GPU 集群         |
-| `sop-009.html` | QA         | 测试环境故障、自动化测试、发版卡点           |
-| `sop-010.html` | 网络 & CDN | CDN 节点故障、DNS 异常、DDoS 防护            |
+仓库根目录还包含：
 
----
+- `prompt/`：AI 交互过程导出的 Markdown，已脱敏。
+- `screenshot/`：最终效果截图。
+- `李宇晗简历.pdf`：个人简历。
 
-## Phase 1：搜索引擎
+## 快速启动
 
-### API
+```powershell
+cd question-1
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt -r requirements-dev.txt
+npm install
+python app.py
+```
+
+打开页面：
+
+- `http://127.0.0.1:8000/v1`
+- `http://127.0.0.1:8000/v2`
+- `http://127.0.0.1:8000/v3`
+
+## 离线验收
+
+默认测试不访问外部网络，未配置真实模型密钥时会自动使用 deterministic fallback。
+
+```powershell
+cd question-1
+python scripts/evaluate.py
+python -m unittest
+npm run lint:frontend
+```
+
+本地最近一次验证结果：
+
+- `python scripts/evaluate.py`：v1 hit@5 = 1.00，v2 hit@3 = 1.00，v3 tool files = 1.00，v3 keywords = 1.00。
+- `python -m unittest`：83 个测试通过，2 个真实 provider 测试默认跳过。
+- `npm run lint:frontend`：通过。
+
+## API 说明
+
+### Phase 1
 
 ```text
 POST /v1/documents
 { "id": "sop-001", "html": "<html>...</html>" }
 → 201 { "id": "sop-001", "title": "后端服务 On-Call SOP" }
 
-GET /v1/search?q={query}
-→ 200 { "query": "...", "results": [{ "id": "...", "title": "...", "snippet": "...", "score": 1.0 }] }
-
-GET /v1
-→ 搜索页面（输入框 + 结果列表，前端不做要求）
+GET /v1/search?q=OOM
+→ 200 { "query": "OOM", "results": [...] }
 ```
 
-### 要求
+典型验收：
 
-1. 实现基于关键词的文档检索
+- `GET /v1/search?q=OOM` 返回 `sop-001`
+- `GET /v1/search?q=故障` 返回多个 SOP
+- `GET /v1/search?q=replication` 返回空，因为该词只在 script 中
+- `GET /v1/search?q=CDN` 返回 `sop-003` 和 `sop-010`
 
-### 验证
-
-| 查询                          | 期望结果                                |
-| ----------------------------- | --------------------------------------- |
-| `GET /v1/search?q=OOM`        | 返回 sop-001                            |
-| `GET /v1/search?q=故障`       | 返回多个文档（大部分 SOP 都包含"故障"） |
-| `GET /v1/search?q=replication` | 返回空（该词仅出现在 script 标签内）    |
-| `GET /v1/search?q=CDN`        | 返回 sop-003, sop-010                   |
-| `GET /v1/search?q=&`          | 返回正文中包含 & 字符的文档             |
-
----
-
-## Phase 2：语义搜索
-
-### API
+### Phase 2
 
 ```text
-GET /v2/search?q={query}
-→ 200 { "query": "...", "results": [{ "id": "...", "title": "...", "snippet": "...", "score": 0.87 }] }
-
-GET /v2
-→ 搜索页面（前端不做要求）
+GET /v2/search?q=服务器挂了
+→ 200 { "query": "服务器挂了", "results": [...] }
 ```
 
-### 要求
+典型验收：
 
-1. 实现语义搜索，查询词不需要在文档中精确出现
-2. 结果按相关性排序
+- `服务器挂了`：后端服务和 SRE SOP 靠前
+- `黑客攻击`：安全团队 SOP 靠前
+- `机器学习模型出问题`：AI & 算法 SOP 靠前
 
-### 验证
-
-| 查询                            | 期望结果                              |
-| ------------------------------- | ------------------------------------- |
-| `GET /v2/search?q=服务器挂了`   | sop-001（后端）和 sop-004（SRE）靠前 |
-| `GET /v2/search?q=黑客攻击`     | sop-005（安全团队）靠前              |
-| `GET /v2/search?q=机器学习模型出问题` | sop-008（AI 算法）靠前              |
-
----
-
-## Phase 3：On-Call 助手 Agent
-
-### API
+### Phase 3
 
 ```text
 GET /v3
-→ 对话界面（消息输入 + 对话历史，前端不做要求）
-
-API 设计不做限定，自行定义。
+POST /v3/chat
 ```
 
-### 要求
+Agent 约束：
 
-1. 实现一个 Agent，通过对话回答用户的 On-Call 问题
-2. Agent 只有一个工具：`readFile(fname: string) -> string`，可读取 `data/` 目录下的任意文件，也可以往 `data/` 目录添加任意文件
-3. Agent 不能列目录、不能使用通配符，只能按文件名读取
-4. 对话过程展示 Agent 的工具调用过程
+- 只有一个工具：`readFile(fname: string) -> string`
+- 工具只能读取 `data/` 下的直接文件名
+- 禁止目录遍历、子目录、通配符和列目录
+- 前端展示工具调用过程、SOP 证据和引用章节
 
-本实现中 `/v3/chat` 会先复用 `/v2` 的 hybrid retrieval 召回候选 SOP 文件，再让 Agent 通过 `readFile(fname)` 读取原文并回答；Agent 不再读取额外索引文件。
+典型验收：
 
-### 验证
+- `数据库主从延迟超过30秒怎么处理？` 读取 `sop-002.html`
+- `服务 OOM 了怎么办？` 读取 `sop-001.html`
+- `P0 故障的响应流程是什么？` 综合多个 SOP
+- `怀疑有人入侵了系统` 读取 `sop-005.html`
+- `推荐结果质量下降了` 读取 `sop-008.html`
 
-| 用户提问                           | 期望行为                                                   |
-| ---------------------------------- | ---------------------------------------------------------- |
-| "数据库主从延迟超过30秒怎么处理？" | Agent 定位并读取 sop-002.html，给出处理步骤                |
-| "服务 OOM 了怎么办？"             | Agent 找到 sop-001.html，给出排查和处理建议                |
-| "P0 故障的响应流程是什么？"       | Agent 综合多个 SOP 给出完整回答                            |
-| "怀疑有人入侵了系统"             | Agent 找到 sop-005.html，给出安全事件响应流程              |
-| "推荐结果质量下降了"             | Agent 找到 sop-008.html，给出排查方向                      |
+## 真实模型配置
 
----
-
-## 本实现的真实 API 配置
-
-默认单元测试不访问外部网络；没有密钥时系统会使用本地 deterministic fallback，保证 README 验收可以离线运行。接入真实 API 时使用 OpenAI-compatible 协议：
+项目使用 OpenAI-compatible 协议。不要把真实 API Key 写入仓库。
 
 ```powershell
 $env:ONCALL_EMBEDDING_BASE_URL="https://api.siliconflow.cn/v1"
 $env:ONCALL_EMBEDDING_API_KEY="..."
 $env:ONCALL_EMBEDDING_MODEL="Qwen/Qwen3-Embedding-0.6B"
 
-$env:ONCALL_CHAT_BASE_URL="https://your-codex-proxy/v1"
-$env:ONCALL_CHAT_API_KEY="..."
-$env:ONCALL_CHAT_MODEL="..."
-```
-
-配置 `ONCALL_EMBEDDING_API_KEY` 后，`/v2/search` 会在启动时构建 SiliconFlow-backed vector index，并把 embedding 缓存在 `.cache/embeddings.sqlite3`；未配置时自动退回离线 semantic fallback。
-
-如果使用本地 Codex/OpenAI 反代，Codex 自身配置可能写成 `base_url = "http://127.0.0.1:8080"` 且 `wire_api = "responses"`。本项目当前的 Agent 走 Chat Completions tool-calling，因此应用侧应配置到 `/v1`：
-
-```powershell
 $env:ONCALL_CHAT_BASE_URL="http://127.0.0.1:8080/v1"
+$env:ONCALL_CHAT_API_KEY="..."
 $env:ONCALL_CHAT_MODEL="gpt-5.4"
 ```
 
-也可以用 `OPENAI_BASE_URL`、`OPENAI_API_KEY`、`OPENAI_MODEL` 作为 Chat Completions 的兼容变量。真实 provider smoke test 是 opt-in 的，避免无意消耗额度：
+也可以使用兼容变量：
+
+```powershell
+$env:OPENAI_BASE_URL="http://127.0.0.1:8080/v1"
+$env:OPENAI_API_KEY="..."
+$env:OPENAI_MODEL="gpt-5.4"
+```
+
+真实 provider smoke test 是 opt-in：
 
 ```powershell
 $env:ONCALL_RUN_INTEGRATION="1"
 python -m unittest tests.integration.test_real_providers -v
 ```
 
-不要把真实 API Key 提交到仓库。
+## 安全与提交说明
 
-## 工程说明
-
-- 离线评测命令：`python scripts/evaluate.py`
+- `.env`、`.cache/`、`.venv/`、`node_modules/`、`docs/`、`output/`、`AGENTS.md` 均不进入最终提交包。
+- `prompt/` 中曾出现的密钥形态字符串已替换为 `***REDACTED***`。
+- `question-1/.env.example` 是示例配置，可以保留。
