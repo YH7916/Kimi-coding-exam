@@ -4,16 +4,21 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>On-Call Copilot</title>
+  <link rel="icon" href="data:,">
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
-  <main>
-    <nav>
-      <a href="/v1">v1 Search</a>
-      <a href="/v2">v2 RAG Retriever</a>
-      <a href="/v3">v3 Agent</a>
+  <header class="topbar">
+    <a class="brand" href="/v3" aria-label="On-Call Copilot home">On-Call Copilot</a>
+    <nav class="version-switcher" aria-label="Version switcher">
+      <a data-mode="v1" href="/v1">v1 Search</a>
+      <a data-mode="v2" href="/v2">v2 RAG</a>
+      <a data-mode="v3" href="/v3">v3 Agent</a>
     </nav>
-    <section id="app" data-route=""></section>
+    <span class="topbar-note">10 SOPs</span>
+  </header>
+  <main>
+    <section id="app" aria-live="polite"></section>
   </main>
   <script src="/static/app.js"></script>
 </body>

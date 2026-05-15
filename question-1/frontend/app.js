@@ -1,5 +1,44 @@
 const app = document.querySelector("#app");
-const route = window.location.pathname;
+
+const MODES = {
+  v1: {
+    endpoint: "/v1/search",
+    kicker: "v1 Search",
+    title: "Search the SOPs",
+    subtitle: "关键词匹配，适合 OOM、CDN、P0 这类明确线索。",
+    placeholder: "OOM / CDN / P0",
+    resultTitle: "Keyword matches",
+  },
+  v2: {
+    endpoint: "/v2/search",
+    kicker: "v2 RAG",
+    title: "Ask for evidence",
+    subtitle: "语义检索相关 SOP 片段，不生成最终处置结论。",
+    placeholder: "服务器挂了，先查什么？",
+    resultTitle: "Retrieved evidence",
+  },
+  v3: {
+    endpoint: "/v3/chat",
+    kicker: "v3 Agent",
+    title: "Ask the agent",
+    subtitle: "读取 SOP，生成回答，并展示工具调用。",
+    placeholder: "P0 故障的响应流程是什么？",
+    resultTitle: "Agent response",
+  },
+};
+
+function modeFromPath(pathname) {
+  if (pathname === "/v1") {
+    return "v1";
+  }
+  if (pathname === "/v2") {
+    return "v2";
+  }
+  return "v3";
+}
+
+let mode = modeFromPath(window.location.pathname);
+let config = MODES[mode];
 
 function escapeHtml(value) {
   return String(value)
@@ -10,85 +49,271 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
-function renderSearch(version, endpoint, title) {
-  app.innerHTML = `
-    <h1>${title}</h1>
-    <form id="search-form">
-      <input name="q" placeholder="输入关键词或问题" autofocus />
-      <button type="submit">搜索</button>
-    </form>
-    <section id="results"></section>
-  `;
+function scoreLabel(score) {
+  const numeric = Number(score);
+  if (!Number.isFinite(numeric)) {
+    return String(score);
+  }
+  return numeric.toFixed(numeric >= 10 ? 0 : 2);
+}
 
-  document.querySelector("#search-form").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const q = new FormData(event.target).get("q") || "";
-    const response = await fetch(`${endpoint}?q=${encodeURIComponent(q)}`);
-    const payload = await response.json();
-    document.querySelector("#results").innerHTML = payload.results.map((item) => `
-      <article>
-        <h2>${escapeHtml(item.title)}</h2>
-        <p>${escapeHtml(item.snippet)}</p>
-        <small>${version} · ${escapeHtml(item.id)} · score=${escapeHtml(item.score)}</small>
-      </article>
-    `).join("") || "<p>没有结果</p>";
+function setActiveNav() {
+  const switcher = document.querySelector(".version-switcher");
+  if (switcher) {
+    switcher.dataset.active = mode;
+  }
+  document.querySelectorAll(".version-switcher a").forEach((item) => {
+    const isActive = item.dataset.mode === mode;
+    item.classList.toggle("is-active", isActive);
+    if (isActive) {
+      item.setAttribute("aria-current", "page");
+    } else {
+      item.removeAttribute("aria-current");
+    }
   });
 }
 
-function renderChat() {
+function switchMode(nextMode, pushState = false) {
+  if (!MODES[nextMode]) {
+    return;
+  }
+  mode = nextMode;
+  config = MODES[mode];
+  if (pushState) {
+    window.history.pushState({}, "", `/${mode}`);
+  }
+  setActiveNav();
+  renderShell();
+}
+
+function setupNavigation() {
+  const switcher = document.querySelector(".version-switcher");
+  if (!switcher) {
+    return;
+  }
+
+  switcher.addEventListener("click", (event) => {
+    if (!(event.target instanceof Element)) {
+      return;
+    }
+    const link = event.target.closest("a[data-mode]");
+    if (!link) {
+      return;
+    }
+    event.preventDefault();
+    const nextMode = link.dataset.mode;
+    if (nextMode === mode) {
+      return;
+    }
+    switchMode(nextMode, true);
+  });
+
+  window.addEventListener("popstate", () => {
+    switchMode(modeFromPath(window.location.pathname));
+  });
+}
+
+function renderShell() {
   app.innerHTML = `
-    <h1>v3 On-Call Agent</h1>
-    <form id="chat-form">
-      <textarea name="message" placeholder="例如：服务 OOM 了怎么办？"></textarea>
-      <button type="submit">发送</button>
-    </form>
-    <section id="trace"></section>
-    <section id="answer"></section>
+    <section class="home">
+      <p class="kicker">${escapeHtml(config.kicker)}</p>
+      <h1>${escapeHtml(config.title)}</h1>
+      <p class="subtitle">${escapeHtml(config.subtitle)}</p>
+      <form id="query-form" class="query-box">
+        <textarea name="q" rows="1" placeholder="${escapeHtml(config.placeholder)}" autofocus></textarea>
+        <button class="send-button" type="submit" aria-label="Submit query">
+          <svg aria-hidden="true" viewBox="0 0 24 24">
+            <path d="M12 19V5"></path>
+            <path d="m5 12 7-7 7 7"></path>
+          </svg>
+        </button>
+      </form>
+    </section>
+    <section id="results" class="results" aria-label="${escapeHtml(config.resultTitle)}"></section>
   `;
 
-  document.querySelector("#chat-form").addEventListener("submit", async (event) => {
+  const form = document.querySelector("#query-form");
+  const textarea = form.querySelector("textarea");
+  const submitButton = form.querySelector(".send-button");
+  let isSubmitting = false;
+
+  textarea.addEventListener("input", () => {
+    textarea.style.height = "auto";
+    textarea.style.height = `${textarea.scrollHeight}px`;
+  });
+
+  textarea.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" || event.shiftKey || event.isComposing) {
+      return;
+    }
     event.preventDefault();
-    const message = new FormData(event.target).get("message") || "";
-    const response = await fetch("/v3/chat", {
+    form.requestSubmit();
+  });
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (isSubmitting) {
+      return;
+    }
+    const q = new FormData(event.target).get("q") || "";
+    if (!String(q).trim()) {
+      textarea.focus();
+      return;
+    }
+    isSubmitting = true;
+    submitButton.disabled = true;
+    try {
+      if (mode === "v3") {
+        await submitChat(q);
+      } else {
+        await submitSearch(q);
+      }
+    } finally {
+      isSubmitting = false;
+      submitButton.disabled = false;
+    }
+  });
+}
+
+function renderLoading(label) {
+  document.querySelector("#results").innerHTML = `
+    <div class="loading-row result-enter">
+      <span class="spinner" aria-hidden="true"></span>
+      <span>${escapeHtml(label)}</span>
+    </div>
+  `;
+}
+
+function renderError(message) {
+  document.querySelector("#results").innerHTML = `
+    <article class="notice-card">
+      <strong>Request failed</strong>
+      <p>${escapeHtml(message)}</p>
+    </article>
+  `;
+}
+
+async function submitSearch(q) {
+  renderLoading(mode === "v1" ? "Searching keywords" : "Retrieving evidence");
+  try {
+    const response = await fetch(`${config.endpoint}?q=${encodeURIComponent(q)}`);
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    const payload = await response.json();
+    renderSearchResults(payload.results || []);
+  } catch (error) {
+    renderError(error.message || "Unknown error");
+  }
+}
+
+function renderSearchResults(results) {
+  const displayedResults = results.slice(0, 3);
+  const empty = `
+    <article class="notice-card result-enter">
+      <strong>No matching SOP found</strong>
+      <p>Try a concrete incident keyword such as OOM, CDN, P0, 黑客攻击, or 模型。</p>
+    </article>
+  `;
+
+  document.querySelector("#results").innerHTML = `
+    <div class="section-heading result-enter">
+      <h2>${escapeHtml(config.resultTitle)}</h2>
+      <span>${displayedResults.length ? `${displayedResults.length} shown` : "empty"}</span>
+    </div>
+    <div class="result-list">
+      ${
+        displayedResults.length
+          ? displayedResults
+              .map(
+                (item, index) => `
+                  <article class="result-row" style="--i: ${index}">
+                    <span class="result-index">${index + 1}</span>
+                    <div>
+                      <h3>${escapeHtml(item.title)}</h3>
+                      <p>${escapeHtml(item.snippet)}</p>
+                      <small>${escapeHtml(item.id)} · score ${escapeHtml(scoreLabel(item.score))}</small>
+                    </div>
+                  </article>
+                `,
+              )
+              .join("")
+          : empty
+      }
+    </div>
+  `;
+}
+
+async function submitChat(message) {
+  renderLoading("Reading SOP evidence");
+  try {
+    const response = await fetch(config.endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message }),
     });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
     const payload = await response.json();
-    const trace = payload.trace || [];
-    const evidence = payload.evidence || [];
-    const toolCalls = payload.tool_calls || [];
-    document.querySelector("#trace").innerHTML = `
-      <div class="trace-list">
-        ${trace.map((item) => `
-          <article class="trace-item">
-            <strong>${escapeHtml(item.type)}</strong>
-            <p>${escapeHtml(item.message)}</p>
-          </article>
-        `).join("")}
-      </div>
-      <div class="tool-list">
-        ${toolCalls.map((call) => `
-          <pre>${escapeHtml(call.tool)}("${escapeHtml(call.fname)}")\n${escapeHtml(call.result_preview || "")}</pre>
-        `).join("")}
-      </div>
-      <div class="evidence-list">
-        ${evidence.map((item) => `
-          <article class="evidence-card">
-            <h2>${escapeHtml(item.file)} · ${escapeHtml(item.section)}</h2>
-            <p>${escapeHtml(item.text)}</p>
-          </article>
-        `).join("")}
-      </div>
-    `;
-    document.querySelector("#answer").innerHTML = `<pre>${escapeHtml(payload.answer)}</pre>`;
-  });
+    renderChatResult(payload);
+  } catch (error) {
+    renderError(error.message || "Unknown error");
+  }
 }
 
-if (route === "/v1") {
-  renderSearch("v1", "/v1/search", "v1 BM25 Keyword Search");
-} else if (route === "/v2") {
-  renderSearch("v2", "/v2/search", "v2 RAG Retriever");
-} else {
-  renderChat();
+function renderChatResult(payload) {
+  const trace = payload.trace || [];
+  const evidence = payload.evidence || [];
+  const toolCalls = payload.tool_calls || [];
+
+  document.querySelector("#results").innerHTML = `
+    <div class="agent-layout result-enter">
+      <section class="answer-panel">
+        <div class="section-heading">
+          <h2>${escapeHtml(config.resultTitle)}</h2>
+          <span>${toolCalls.length} tool calls</span>
+        </div>
+        <article class="answer-card">
+          <pre>${escapeHtml(payload.answer || "")}</pre>
+        </article>
+        ${renderEvidence(evidence)}
+      </section>
+      <aside class="trace-panel">
+        <div class="section-heading">
+          <h2>Trace</h2>
+          <span>visible</span>
+        </div>
+        <div class="trace-list">
+          ${trace.map((item, index) => `
+            <article class="trace-item" style="--i: ${index}">
+              <span>${escapeHtml(item.type)}</span>
+              <p>${escapeHtml(item.message)}</p>
+            </article>
+          `).join("")}
+        </div>
+      </aside>
+    </div>
+  `;
 }
+
+function renderEvidence(evidence) {
+  if (!evidence.length) {
+    return "";
+  }
+  return `
+    <div class="evidence-strip">
+      ${evidence.slice(0, 3).map((item, index) => `
+        <article class="evidence-card" style="--i: ${index}">
+          <small>${escapeHtml(item.file)}</small>
+          <h3>${escapeHtml(item.section)}</h3>
+          <p>${escapeHtml(item.text)}</p>
+        </article>
+      `).join("")}
+    </div>
+  `;
+}
+
+setupNavigation();
+setActiveNav();
+renderShell();
