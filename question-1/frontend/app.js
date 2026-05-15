@@ -41,6 +41,8 @@ function modeFromPath(pathname) {
 let mode = modeFromPath(window.location.pathname);
 let config = MODES[mode];
 const chatTurns = [];
+const SETTINGS_STORAGE_KEY = "oncall-copilot-settings";
+const userSettings = loadUserSettings();
 
 function isActiveChat() {
   return mode === "v3" && chatTurns.length > 0;
@@ -48,6 +50,22 @@ function isActiveChat() {
 
 function hasPendingChatTurn() {
   return chatTurns.some((turn) => turn.role === "pending" || turn.streaming);
+}
+
+function loadUserSettings() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(SETTINGS_STORAGE_KEY) || "{}");
+    return {
+      showTrace: saved.showTrace !== false,
+      sectionJump: saved.sectionJump !== false,
+    };
+  } catch (_error) {
+    return { showTrace: true, sectionJump: true };
+  }
+}
+
+function saveUserSettings() {
+  localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(userSettings));
 }
 
 function escapeHtml(value) {
@@ -189,28 +207,72 @@ async function refreshProviderStatus() {
     }
     renderProviderStatus(await response.json());
   } catch (_error) {
-    const note = document.querySelector(".topbar-note");
-    if (note) {
-      note.textContent = "10 SOPs";
-    }
+    renderProviderStatus(null);
   }
 }
 
 function renderProviderStatus(status) {
-  const note = document.querySelector(".topbar-note");
-  if (!note) {
+  const summary = document.querySelector("#settings-summary");
+  const details = document.querySelector("#provider-status-details");
+  const button = document.querySelector("#settings-button");
+  if (!summary || !details || !button) {
     return;
   }
+
+  if (!status) {
+    summary.textContent = "状态不可用";
+    details.innerHTML = `<p>状态暂时不可用。</p>`;
+    return;
+  }
+
   const embeddingMode = status.embedding?.mode || "fallback";
   const chatMode = status.chat?.mode || "fallback";
-  const cache = status.cache || {};
-  const cacheLabel = cache.enabled
-    ? `cache ${cache.entries || 0} · ${cache.hits || 0}/${cache.misses || 0}`
-    : "cache off";
-  note.innerHTML = `
-    <span class="provider-pill ${embeddingMode === "real" ? "is-real" : ""}">Emb ${escapeHtml(embeddingMode)}</span>
-    <span class="provider-pill ${chatMode === "real" ? "is-real" : ""}">Chat ${escapeHtml(chatMode)}</span>
-    <span class="provider-cache">${escapeHtml(cacheLabel)}</span>
+  const isAllReal = embeddingMode === "real" && chatMode === "real";
+  button.title = isAllReal ? "模型服务已连接" : "部分能力使用本地模式";
+  summary.textContent = isAllReal ? "模型服务已连接" : "部分本地模式";
+  details.innerHTML = `
+    ${renderProviderRow("向量检索", status.embedding, "SiliconFlow Embedding")}
+    ${renderProviderRow("对话模型", status.chat, "OpenAI Chat Completions")}
+    ${renderCacheRow(status.cache || {})}
+  `;
+}
+
+function renderProviderRow(label, item, realLabel) {
+  const mode = item?.mode || "fallback";
+  const isReal = mode === "real";
+  const model = item?.model ? `<small>${escapeHtml(item.model)}</small>` : "";
+  return `
+    <article class="provider-row">
+      <div>
+        <strong>${escapeHtml(label)}</strong>
+        <span>${escapeHtml(isReal ? realLabel : "本地兜底")}</span>
+        ${model}
+      </div>
+      <mark class="${isReal ? "is-real" : ""}">${isReal ? "已连接" : "本地"}</mark>
+    </article>
+  `;
+}
+
+function renderCacheRow(cache) {
+  if (!cache.enabled) {
+    return `
+      <article class="provider-row">
+        <div>
+          <strong>向量缓存</strong>
+          <span>当前未启用</span>
+        </div>
+        <mark>关闭</mark>
+      </article>
+    `;
+  }
+  return `
+    <article class="provider-row">
+      <div>
+        <strong>向量缓存</strong>
+        <span>${escapeHtml(cache.entries || 0)} 条向量，命中 ${escapeHtml(cache.hits || 0)} 次</span>
+      </div>
+      <mark class="is-real">开启</mark>
+    </article>
   `;
 }
 
@@ -275,6 +337,57 @@ function setupNavigation() {
 
   window.addEventListener("popstate", () => {
     switchMode(modeFromPath(window.location.pathname));
+  });
+}
+
+function setupSettingsPopover() {
+  const button = document.querySelector("#settings-button");
+  const popover = document.querySelector("#settings-popover");
+  const showTrace = document.querySelector("#setting-show-trace");
+  const sectionJump = document.querySelector("#setting-section-jump");
+  if (!button || !popover || !showTrace || !sectionJump) {
+    return;
+  }
+
+  showTrace.checked = userSettings.showTrace;
+  sectionJump.checked = userSettings.sectionJump;
+
+  button.addEventListener("click", () => {
+    const isOpening = popover.hidden;
+    popover.hidden = !isOpening;
+    button.setAttribute("aria-expanded", String(isOpening));
+  });
+
+  showTrace.addEventListener("change", () => {
+    userSettings.showTrace = showTrace.checked;
+    saveUserSettings();
+    if (isActiveChat()) {
+      renderChatConversation();
+    }
+  });
+
+  sectionJump.addEventListener("change", () => {
+    userSettings.sectionJump = sectionJump.checked;
+    saveUserSettings();
+  });
+
+  document.addEventListener("click", (event) => {
+    if (!(event.target instanceof Element)) {
+      return;
+    }
+    if (popover.hidden || button.contains(event.target) || popover.contains(event.target)) {
+      return;
+    }
+    popover.hidden = true;
+    button.setAttribute("aria-expanded", "false");
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || popover.hidden) {
+      return;
+    }
+    popover.hidden = true;
+    button.setAttribute("aria-expanded", "false");
   });
 }
 
@@ -611,18 +724,8 @@ function renderChatConversation() {
   const trace = latest?.trace || [];
   const toolCalls = latest?.toolCalls || [];
   const visibleTurns = chatTurns.filter((turn) => turn.role === "user" || turn.role === "assistant").length;
-
-  document.querySelector("#results").innerHTML = `
-    <div class="agent-layout chat-agent-layout result-enter">
-      <section class="answer-panel chat-thread-panel">
-        <div class="chat-thread-header">
-          <span>On-Call Agent</span>
-          <small>${visibleTurns} turns</small>
-        </div>
-        <div class="chat-list">
-          ${chatTurns.map((turn, index) => renderChatTurn(turn, index)).join("")}
-        </div>
-      </section>
+  const tracePanel = userSettings.showTrace
+    ? `
       <aside class="trace-panel">
         <div class="section-heading">
           <h2>Trace</h2>
@@ -632,6 +735,21 @@ function renderChatConversation() {
           ${renderTrace(trace)}
         </div>
       </aside>
+    `
+    : "";
+
+  document.querySelector("#results").innerHTML = `
+    <div class="agent-layout chat-agent-layout ${userSettings.showTrace ? "" : "is-trace-hidden"} result-enter">
+      <section class="answer-panel chat-thread-panel">
+        <div class="chat-thread-header">
+          <span>On-Call Agent</span>
+          <small>${visibleTurns} turns</small>
+        </div>
+        <div class="chat-list">
+          ${chatTurns.map((turn, index) => renderChatTurn(turn, index)).join("")}
+        </div>
+      </section>
+      ${tracePanel}
     </div>
   `;
 }
@@ -810,7 +928,7 @@ function renderSopModal(innerHtml) {
 }
 
 function renderSopDocument(documentDetail, targetSection = "") {
-  const targetKey = sectionKey(targetSection);
+  const targetKey = userSettings.sectionJump ? sectionKey(targetSection) : "";
   const sections = (documentDetail.sections || [])
     .filter((section) => String(section.text || "").trim())
     .map((section) => `
@@ -839,6 +957,9 @@ function renderSopDocument(documentDetail, targetSection = "") {
 }
 
 function scrollToSopSection(targetSection) {
+  if (!userSettings.sectionJump) {
+    return;
+  }
   const key = sectionKey(targetSection);
   if (!key) {
     return;
@@ -858,6 +979,7 @@ function closeSopModal() {
 }
 
 setupNavigation();
+setupSettingsPopover();
 setupSopPreview();
 setActiveNav();
 renderShell();

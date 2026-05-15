@@ -15,7 +15,38 @@
       <a data-mode="v2" href="/v2">v2 RAG</a>
       <a data-mode="v3" href="/v3">v3 Agent</a>
     </nav>
-    <span class="topbar-note">10 SOPs</span>
+    <div class="topbar-tools">
+      <button
+        id="settings-button"
+        class="settings-button"
+        type="button"
+        aria-label="Runtime status and settings"
+        aria-expanded="false"
+        aria-controls="settings-popover"
+      >
+        <img src="/static/assets/settings-2.svg" alt="" aria-hidden="true">
+      </button>
+      <section id="settings-popover" class="settings-popover" hidden>
+        <div class="settings-popover-header">
+          <span>运行状态</span>
+          <small id="settings-summary">正在检查</small>
+        </div>
+        <div id="provider-status-details" class="provider-status-details">
+          <p>正在加载运行状态...</p>
+        </div>
+        <div class="settings-group">
+          <span>界面</span>
+          <label>
+            <input id="setting-show-trace" type="checkbox">
+            显示工具调用过程
+          </label>
+          <label>
+            <input id="setting-section-jump" type="checkbox">
+            打开 SOP 时定位引用章节
+          </label>
+        </div>
+      </section>
+    </div>
   </header>
   <main>
     <section id="app" aria-live="polite"></section>

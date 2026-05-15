@@ -17,6 +17,7 @@ class FrontendStaticTest(unittest.TestCase):
         """The frontend lives outside backend route modules."""
         for name in ("index.html", "app.js", "styles.css"):
             self.assertTrue((PROJECT_ROOT / "frontend" / name).is_file())
+        self.assertTrue((PROJECT_ROOT / "frontend" / "assets" / "settings-2.svg").is_file())
 
     def test_pages_use_static_frontend_shell(self):
         """README page routes serve the shared static frontend shell."""
@@ -27,6 +28,8 @@ class FrontendStaticTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn('<script src="/static/app.js"', response.text)
         self.assertIn('<link rel="stylesheet" href="/static/styles.css"', response.text)
+        self.assertIn('/static/assets/settings-2.svg', response.text)
+        self.assertIn('id="settings-button"', response.text)
 
     def test_static_js_calls_readme_api_routes(self):
         """Frontend JavaScript calls the README API routes."""
@@ -37,6 +40,8 @@ class FrontendStaticTest(unittest.TestCase):
         self.assertIn("/v3/chat", js)
         self.assertIn("/v3/chat/stream", js)
         self.assertIn("/provider-status", js)
+        self.assertIn("setupSettingsPopover", js)
+        self.assertIn("setting-show-trace", js)
         self.assertIn("visibleChatHistory", js)
         self.assertIn("JSON.stringify({ message, history })", js)
         self.assertIn("renderMarkdown", js)
