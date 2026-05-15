@@ -626,27 +626,6 @@ h1 {
   padding: 4px 0 12px;
 }
 
-.chat-thread-header {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 16px;
-  max-width: 760px;
-  margin: 0 auto 18px;
-  color: var(--muted);
-  font-size: 13px;
-}
-
-.chat-thread-header span {
-  color: var(--text);
-  font-weight: 700;
-}
-
-.chat-thread-header small {
-  color: var(--faint);
-  font-size: 12px;
-}
-
 .chat-list {
   display: grid;
   gap: 18px;
@@ -1153,10 +1132,6 @@ body.chat-active .chat-message-assistant {
   .chat-agent-layout {
     min-height: auto;
     gap: 22px;
-  }
-
-  .chat-thread-header {
-    max-width: 100%;
   }
 
   body.chat-active .chat-message-user {

@@ -764,7 +764,6 @@ function renderChatConversation() {
   const latest = latestAssistantTurn();
   const trace = latest?.trace || [];
   const toolCalls = latest?.toolCalls || [];
-  const visibleTurns = chatTurns.filter((turn) => turn.role === "user" || turn.role === "assistant").length;
   const tracePanel = userSettings.showTrace
     ? `
       <aside class="trace-panel">
@@ -782,10 +781,6 @@ function renderChatConversation() {
   document.querySelector("#results").innerHTML = `
     <div class="agent-layout chat-agent-layout ${userSettings.showTrace ? "" : "is-trace-hidden"} result-enter">
       <section class="answer-panel chat-thread-panel">
-        <div class="chat-thread-header">
-          <span>On-Call Agent</span>
-          <small>${visibleTurns} turns</small>
-        </div>
         <div class="chat-list">
           ${chatTurns.map((turn, index) => renderChatTurn(turn, index)).join("")}
         </div>
