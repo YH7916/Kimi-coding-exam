@@ -5,6 +5,9 @@ from pydantic import BaseModel, Field
 from oncall_app.agent.evidence import EvidenceItem
 from oncall_app.models import AgentResponse, SearchResult, ToolCall
 
+MAX_EVIDENCE_HEADING_CHARS = 80
+MAX_EVIDENCE_TEXT_CHARS = 240
+
 
 class SearchResultItem(BaseModel):
     """One search result returned by the README APIs."""
@@ -107,8 +110,8 @@ def chat_response(response: AgentResponse, evidence: list[EvidenceItem]) -> Chat
         evidence=[
             EvidenceResponseItem(
                 file=item.file,
-                section=item.section_heading,
-                text=item.text,
+                section=_compact_text(item.section_heading, MAX_EVIDENCE_HEADING_CHARS),
+                text=_compact_text(item.text, MAX_EVIDENCE_TEXT_CHARS),
             )
             for item in evidence
         ],
@@ -128,3 +131,11 @@ def _tool_call_item(call: ToolCall) -> ToolCallItem:
         fname=call.fname,
         result_preview=call.result_preview,
     )
+
+
+def _compact_text(value: str, limit: int) -> str:
+    """Return a single-line preview bounded for the frontend."""
+    normalized = " ".join(value.split())
+    if len(normalized) <= limit:
+        return normalized
+    return f"{normalized[: limit - 1]}..."

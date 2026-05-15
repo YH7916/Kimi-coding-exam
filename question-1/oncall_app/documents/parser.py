@@ -3,7 +3,7 @@
 import re
 from html import unescape
 
-from bs4 import BeautifulSoup, Tag
+from bs4 import BeautifulSoup, NavigableString, Tag
 
 from oncall_app.models import Document, Section
 
@@ -18,6 +18,13 @@ def normalize_text(value: str) -> str:
 def _visible_text(node: Tag | BeautifulSoup) -> str:
     """Return normalized visible text from a BeautifulSoup node."""
     return normalize_text(node.get_text(" ", strip=True))
+
+
+def _direct_text(node: Tag) -> str:
+    """Return text directly owned by a tag, excluding malformed nested sections."""
+    return normalize_text(
+        " ".join(str(child) for child in node.children if isinstance(child, NavigableString))
+    )
 
 
 def _extract_sections(soup: BeautifulSoup) -> list[Section]:
@@ -45,7 +52,7 @@ def _extract_sections(soup: BeautifulSoup) -> list[Section]:
         if not isinstance(node, Tag):
             continue
         tag_name = node.name.lower()
-        text = _visible_text(node)
+        text = _direct_text(node) if tag_name in {"h2", "h3", "p"} else _visible_text(node)
         if not text:
             continue
         if tag_name in {"h2", "h3"}:

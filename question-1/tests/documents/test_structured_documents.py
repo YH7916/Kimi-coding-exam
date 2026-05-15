@@ -30,5 +30,15 @@ class StructuredDocumentTest(unittest.TestCase):
         self.assertIn("三、常见故障处理", headings)
         self.assertIn("场景二：单服务OOM崩溃", headings)
 
+    def test_malformed_headings_do_not_swallow_sections(self):
+        """Malformed SOP headings should not absorb following body text."""
+        repository = DocumentRepository(DATA_DIR)
+        document = repository.get("sop-004")
+        headings = [section.heading for section in document.sections]
+
+        self.assertIn("二、监控指标", headings)
+        self.assertIn("场景一：Kubernetes节点NotReady", headings)
+        self.assertTrue(all(len(heading) <= 40 for heading in headings))
+
 if __name__ == "__main__":
     unittest.main()
