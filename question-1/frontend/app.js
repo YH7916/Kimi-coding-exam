@@ -43,6 +43,8 @@ let config = MODES[mode];
 const chatTurns = [];
 const SETTINGS_STORAGE_KEY = "oncall-copilot-settings";
 const userSettings = loadUserSettings();
+let pendingAssistantContentTurn = null;
+let pendingAssistantContentFrame = 0;
 
 function isActiveChat() {
   return mode === "v3" && chatTurns.length > 0;
@@ -578,7 +580,12 @@ async function submitChat(message) {
       throw new Error(`HTTP ${response.status}`);
     }
     await readSseStream(response, (event) => {
-      applyChatStreamEvent(assistantTurn, event);
+      const renderMode = applyChatStreamEvent(assistantTurn, event);
+      if (renderMode === "content") {
+        scheduleAssistantContentUpdate(assistantTurn);
+        return;
+      }
+      cancelAssistantContentUpdate();
       renderChatConversation();
     });
     assistantTurn.streaming = false;
@@ -664,7 +671,7 @@ function applyChatStreamEvent(turn, event) {
       ...(turn.trace || []),
       { type: "retrieval", message: files ? `v2 hybrid retrieval candidates: ${files}` : "no candidates" },
     ];
-    return;
+    return "full";
   }
   if (event.type === "tool_call") {
     turn.toolCalls = [...(turn.toolCalls || []), { tool: data.tool || "readFile", fname: data.fname || "" }];
@@ -672,14 +679,14 @@ function applyChatStreamEvent(turn, event) {
       ...(turn.trace || []),
       { type: "tool_call", message: `readFile("${data.fname || ""}")` },
     ];
-    return;
+    return "full";
   }
   if (event.type === "observation") {
     turn.trace = [
       ...(turn.trace || []),
       { type: "observation", message: `${data.fname || "SOP"} loaded (${data.chars || 0} chars)` },
     ];
-    return;
+    return "full";
   }
   if (event.type === "evidence") {
     turn.evidence = data.items || [];
@@ -687,11 +694,11 @@ function applyChatStreamEvent(turn, event) {
       ...(turn.trace || []),
       { type: "evidence", message: `${turn.evidence.length} cited sections extracted` },
     ];
-    return;
+    return "full";
   }
   if (event.type === "answer_delta") {
     turn.content = `${turn.content || ""}${data.delta || ""}`;
-    return;
+    return "content";
   }
   if (event.type === "done") {
     turn.streaming = false;
@@ -699,18 +706,19 @@ function applyChatStreamEvent(turn, event) {
     turn.evidence = data.evidence || turn.evidence || [];
     turn.trace = data.trace || turn.trace || [];
     turn.toolCalls = data.tool_calls || turn.toolCalls || [];
-    return;
+    return "full";
   }
   if (event.type === "warning") {
     turn.trace = [
       ...(turn.trace || []),
       { type: "warning", message: data.message || "Agent finished with a fallback answer" },
     ];
-    return;
+    return "full";
   }
   if (event.type === "error") {
     applyChatFailure(turn, data.message || "Streaming request failed");
   }
+  return "full";
 }
 
 function applyChatFailure(turn, message) {
@@ -790,6 +798,40 @@ function renderChatConversation() {
   `;
 }
 
+function scheduleAssistantContentUpdate(turn) {
+  pendingAssistantContentTurn = turn;
+  if (pendingAssistantContentFrame) {
+    return;
+  }
+  pendingAssistantContentFrame = window.requestAnimationFrame(() => {
+    pendingAssistantContentFrame = 0;
+    if (pendingAssistantContentTurn) {
+      updateAssistantContent(pendingAssistantContentTurn);
+    }
+    pendingAssistantContentTurn = null;
+  });
+}
+
+function cancelAssistantContentUpdate() {
+  if (pendingAssistantContentFrame) {
+    window.cancelAnimationFrame(pendingAssistantContentFrame);
+    pendingAssistantContentFrame = 0;
+  }
+  pendingAssistantContentTurn = null;
+}
+
+function updateAssistantContent(turn) {
+  const index = chatTurns.indexOf(turn);
+  const body = document.querySelector(
+    `.chat-message-assistant[data-turn-index="${index}"] .markdown-body`,
+  );
+  if (!body) {
+    renderChatConversation();
+    return;
+  }
+  body.innerHTML = renderAssistantBody(turn);
+}
+
 function renderChatTurn(turn, index) {
   if (turn.role === "pending") {
     return `
@@ -816,18 +858,22 @@ function renderChatTurn(turn, index) {
     `;
   }
   return `
-    <article class="chat-message chat-message-assistant" style="--i: ${index}">
+    <article class="chat-message chat-message-assistant" data-turn-index="${index}" style="--i: ${index}">
       <small>Assistant</small>
-      <div class="markdown-body">
-        ${
-          turn.content
-            ? renderMarkdown(turn.content)
-            : `<p class="stream-placeholder">${escapeHtml(streamingPlaceholder(turn))}</p>`
-        }
-        ${turn.streaming ? `<span class="stream-cursor" aria-hidden="true"></span>` : ""}
-      </div>
+      <div class="markdown-body">${renderAssistantBody(turn)}</div>
       ${renderEvidence(turn.evidence || [])}
     </article>
+  `;
+}
+
+function renderAssistantBody(turn) {
+  return `
+    ${
+      turn.content
+        ? renderMarkdown(turn.content)
+        : `<p class="stream-placeholder">${escapeHtml(streamingPlaceholder(turn))}</p>`
+    }
+    ${turn.streaming ? `<span class="stream-cursor" aria-hidden="true"></span>` : ""}
   `;
 }
 
