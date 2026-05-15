@@ -19,6 +19,7 @@ const MODES = {
   },
   v3: {
     endpoint: "/v3/chat",
+    streamEndpoint: "/v3/chat/stream",
     kicker: "v3 Agent",
     title: "Ask the agent",
     subtitle: "读取 SOP，生成回答，并展示工具调用。",
@@ -46,7 +47,7 @@ function isActiveChat() {
 }
 
 function hasPendingChatTurn() {
-  return chatTurns.some((turn) => turn.role === "pending");
+  return chatTurns.some((turn) => turn.role === "pending" || turn.streaming);
 }
 
 function escapeHtml(value) {
@@ -180,8 +181,45 @@ function scoreLabel(score) {
   return numeric.toFixed(numeric >= 10 ? 0 : 2);
 }
 
+async function refreshProviderStatus() {
+  try {
+    const response = await fetch("/provider-status");
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    renderProviderStatus(await response.json());
+  } catch (_error) {
+    const note = document.querySelector(".topbar-note");
+    if (note) {
+      note.textContent = "10 SOPs";
+    }
+  }
+}
+
+function renderProviderStatus(status) {
+  const note = document.querySelector(".topbar-note");
+  if (!note) {
+    return;
+  }
+  const embeddingMode = status.embedding?.mode || "fallback";
+  const chatMode = status.chat?.mode || "fallback";
+  const cache = status.cache || {};
+  const cacheLabel = cache.enabled
+    ? `cache ${cache.entries || 0} · ${cache.hits || 0}/${cache.misses || 0}`
+    : "cache off";
+  note.innerHTML = `
+    <span class="provider-pill ${embeddingMode === "real" ? "is-real" : ""}">Emb ${escapeHtml(embeddingMode)}</span>
+    <span class="provider-pill ${chatMode === "real" ? "is-real" : ""}">Chat ${escapeHtml(chatMode)}</span>
+    <span class="provider-cache">${escapeHtml(cacheLabel)}</span>
+  `;
+}
+
 function sopIdFromFile(value) {
   return String(value || "").replace(/\.html$/i, "");
+}
+
+function sectionKey(value) {
+  return String(value || "").trim().replace(/\s+/g, " ").toLowerCase();
 }
 
 function setActiveNav() {
@@ -361,6 +399,7 @@ async function submitSearch(q) {
     }
     const payload = await response.json();
     renderSearchResults(payload.results || []);
+    refreshProviderStatus();
   } catch (error) {
     renderError(error.message || "Unknown error");
   }
@@ -406,10 +445,18 @@ function renderSearchResults(results) {
 async function submitChat(message) {
   const history = visibleChatHistory();
   chatTurns.push({ role: "user", content: String(message) });
-  chatTurns.push({ role: "pending", content: "Reading SOP evidence" });
+  const assistantTurn = {
+    role: "assistant",
+    content: "",
+    evidence: [],
+    trace: [],
+    toolCalls: [],
+    streaming: true,
+  };
+  chatTurns.push(assistantTurn);
   renderShell();
   try {
-    const response = await fetch(config.endpoint, {
+    const response = await fetch(config.streamEndpoint || `${config.endpoint}/stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message, history }),
@@ -417,23 +464,19 @@ async function submitChat(message) {
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
     }
-    const payload = await response.json();
-    removePendingTurn();
-    chatTurns.push({
-      role: "assistant",
-      content: payload.answer || "",
-      evidence: payload.evidence || [],
-      trace: payload.trace || [],
-      toolCalls: payload.tool_calls || [],
+    await readSseStream(response, (event) => {
+      applyChatStreamEvent(assistantTurn, event);
+      renderChatConversation();
     });
+    assistantTurn.streaming = false;
     renderShell();
   } catch (error) {
-    removePendingTurn();
-    chatTurns.push({
-      role: "error",
-      content: error.message || "Unknown error",
-    });
+    assistantTurn.role = "error";
+    assistantTurn.streaming = false;
+    assistantTurn.content = error.message || "Unknown error";
     renderShell();
+  } finally {
+    refreshProviderStatus();
   }
 }
 
@@ -449,6 +492,108 @@ function removePendingTurn() {
       chatTurns.splice(index, 1);
       return;
     }
+  }
+}
+
+async function readSseStream(response, onEvent) {
+  if (!response.body) {
+    throw new Error("Streaming response body is unavailable");
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) {
+      break;
+    }
+    buffer += decoder.decode(value, { stream: true });
+    const frames = buffer.split("\n\n");
+    buffer = frames.pop() || "";
+    frames.forEach((frame) => {
+      const event = parseSseFrame(frame);
+      if (event) {
+        onEvent(event);
+      }
+    });
+  }
+
+  const tail = buffer.trim();
+  if (tail) {
+    const event = parseSseFrame(tail);
+    if (event) {
+      onEvent(event);
+    }
+  }
+}
+
+function parseSseFrame(frame) {
+  let type = "message";
+  const dataLines = [];
+  frame.split("\n").forEach((line) => {
+    if (line.startsWith("event:")) {
+      type = line.slice("event:".length).trim();
+    }
+    if (line.startsWith("data:")) {
+      dataLines.push(line.slice("data:".length).trimStart());
+    }
+  });
+  if (!dataLines.length) {
+    return null;
+  }
+  return { type, data: JSON.parse(dataLines.join("\n")) };
+}
+
+function applyChatStreamEvent(turn, event) {
+  const data = event.data || {};
+  if (event.type === "retrieval") {
+    const files = (data.candidates || []).map((item) => item.file).join(", ");
+    turn.trace = [
+      ...(turn.trace || []),
+      { type: "retrieval", message: files ? `v2 hybrid retrieval candidates: ${files}` : "no candidates" },
+    ];
+    return;
+  }
+  if (event.type === "tool_call") {
+    turn.toolCalls = [...(turn.toolCalls || []), { tool: data.tool || "readFile", fname: data.fname || "" }];
+    turn.trace = [
+      ...(turn.trace || []),
+      { type: "tool_call", message: `readFile("${data.fname || ""}")` },
+    ];
+    return;
+  }
+  if (event.type === "observation") {
+    turn.trace = [
+      ...(turn.trace || []),
+      { type: "observation", message: `${data.fname || "SOP"} loaded (${data.chars || 0} chars)` },
+    ];
+    return;
+  }
+  if (event.type === "evidence") {
+    turn.evidence = data.items || [];
+    turn.trace = [
+      ...(turn.trace || []),
+      { type: "evidence", message: `${turn.evidence.length} cited sections extracted` },
+    ];
+    return;
+  }
+  if (event.type === "answer_delta") {
+    turn.content = `${turn.content || ""}${data.delta || ""}`;
+    return;
+  }
+  if (event.type === "done") {
+    turn.streaming = false;
+    turn.content = data.answer || turn.content || "";
+    turn.evidence = data.evidence || turn.evidence || [];
+    turn.trace = data.trace || turn.trace || [];
+    turn.toolCalls = data.tool_calls || turn.toolCalls || [];
+    return;
+  }
+  if (event.type === "error") {
+    turn.role = "error";
+    turn.streaming = false;
+    turn.content = data.message || "Streaming request failed";
   }
 }
 
@@ -519,7 +664,14 @@ function renderChatTurn(turn, index) {
   return `
     <article class="chat-message chat-message-assistant" style="--i: ${index}">
       <small>Assistant</small>
-      <div class="markdown-body">${renderMarkdown(turn.content || "")}</div>
+      <div class="markdown-body">
+        ${
+          turn.content
+            ? renderMarkdown(turn.content)
+            : `<p class="stream-placeholder">Retrieving SOP evidence...</p>`
+        }
+        ${turn.streaming ? `<span class="stream-cursor" aria-hidden="true"></span>` : ""}
+      </div>
       ${renderEvidence(turn.evidence || [])}
     </article>
   `;
@@ -549,7 +701,13 @@ function renderEvidence(evidence) {
   return `
     <div class="evidence-strip">
       ${evidence.slice(0, 3).map((item, index) => `
-        <button type="button" class="evidence-card sop-open-button" data-sop-id="${escapeHtml(sopIdFromFile(item.file))}" style="--i: ${index}">
+        <button
+          type="button"
+          class="evidence-card sop-open-button"
+          data-sop-id="${escapeHtml(sopIdFromFile(item.file))}"
+          data-sop-section="${escapeHtml(item.section)}"
+          style="--i: ${index}"
+        >
           <small>${escapeHtml(item.file)}</small>
           <h3>${escapeHtml(item.section)}</h3>
           <p>${escapeHtml(item.text)}</p>
@@ -569,7 +727,7 @@ function setupSopPreview() {
       return;
     }
     event.preventDefault();
-    openSopModal(trigger.dataset.sopId || "");
+    openSopModal(trigger.dataset.sopId || "", trigger.dataset.sopSection || "");
   });
 
   document.addEventListener("click", (event) => {
@@ -588,7 +746,7 @@ function setupSopPreview() {
   });
 }
 
-async function openSopModal(rawId) {
+async function openSopModal(rawId, targetSection = "") {
   const docId = sopIdFromFile(rawId);
   if (!docId) {
     return;
@@ -613,7 +771,8 @@ async function openSopModal(rawId) {
       throw new Error(`HTTP ${response.status}`);
     }
     const documentDetail = await response.json();
-    renderSopModal(renderSopDocument(documentDetail));
+    renderSopModal(renderSopDocument(documentDetail, targetSection));
+    scrollToSopSection(targetSection);
   } catch (error) {
     renderSopModal(`
       <header class="sop-modal-header">
@@ -650,11 +809,15 @@ function renderSopModal(innerHtml) {
   root.querySelector(".sop-modal-close")?.focus();
 }
 
-function renderSopDocument(documentDetail) {
+function renderSopDocument(documentDetail, targetSection = "") {
+  const targetKey = sectionKey(targetSection);
   const sections = (documentDetail.sections || [])
     .filter((section) => String(section.text || "").trim())
     .map((section) => `
-      <section class="sop-full-section">
+      <section
+        class="sop-full-section${targetKey && sectionKey(section.heading) === targetKey ? " is-target" : ""}"
+        data-section-key="${escapeHtml(sectionKey(section.heading))}"
+      >
         <h3>${escapeHtml(section.heading || documentDetail.title)}</h3>
         <p>${escapeHtml(section.text)}</p>
       </section>
@@ -675,6 +838,17 @@ function renderSopDocument(documentDetail) {
   `;
 }
 
+function scrollToSopSection(targetSection) {
+  const key = sectionKey(targetSection);
+  if (!key) {
+    return;
+  }
+  requestAnimationFrame(() => {
+    const target = document.querySelector(`[data-section-key="${CSS.escape(key)}"]`);
+    target?.scrollIntoView({ block: "start", behavior: "smooth" });
+  });
+}
+
 function closeSopModal() {
   const root = document.querySelector("#sop-modal-root");
   if (root) {
@@ -687,3 +861,4 @@ setupNavigation();
 setupSopPreview();
 setActiveNav();
 renderShell();
+refreshProviderStatus();

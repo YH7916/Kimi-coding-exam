@@ -59,6 +59,34 @@ class DocumentDetail(BaseModel):
     sections: list[DocumentSectionItem]
 
 
+class ProviderEndpointStatus(BaseModel):
+    """Non-sensitive runtime status for one external provider."""
+
+    mode: Literal["real", "fallback"]
+    model: str | None = None
+    base_url: str | None = None
+    detail: str
+
+
+class EmbeddingCacheStatus(BaseModel):
+    """Embedding cache counters for the current process."""
+
+    enabled: bool
+    path: str | None = None
+    entries: int = 0
+    hits: int = 0
+    misses: int = 0
+    writes: int = 0
+
+
+class ProviderStatusResponse(BaseModel):
+    """Provider and cache status shown in the frontend."""
+
+    embedding: ProviderEndpointStatus
+    chat: ProviderEndpointStatus
+    cache: EmbeddingCacheStatus
+
+
 class ChatHistoryItem(BaseModel):
     """One previous visible chat turn supplied by the frontend."""
 

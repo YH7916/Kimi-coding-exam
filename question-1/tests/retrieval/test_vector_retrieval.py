@@ -76,9 +76,14 @@ class VectorRetrievalTest(unittest.TestCase):
 
             first = cache.get_or_create("same text", client.embed)
             second = cache.get_or_create("same text", client.embed)
+            stats = cache.stats()
 
         self.assertEqual(first, second)
         self.assertEqual(client.calls, 1)
+        self.assertEqual(stats["entries"], 1)
+        self.assertEqual(stats["hits"], 1)
+        self.assertEqual(stats["misses"], 1)
+        self.assertEqual(stats["writes"], 1)
 
 
 if __name__ == "__main__":

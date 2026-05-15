@@ -60,6 +60,26 @@ class AgentRouteTest(unittest.TestCase):
         self.assertIn("sop-001.html", payload["trace"][0]["message"])
         self.assertTrue(any("升级" in item["section"] for item in payload["evidence"]))
 
+    def test_v3_chat_stream_emits_agent_events(self):
+        """Streaming chat exposes retrieval, tool, evidence, and answer events."""
+        client = TestClient(create_app(test_mode=True))
+
+        with client.stream(
+            "POST",
+            "/v3/chat/stream",
+            json={"message": "服务 OOM 了怎么办？"},
+        ) as response:
+            body = "".join(response.iter_text())
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("text/event-stream", response.headers["content-type"])
+        self.assertIn("event: retrieval", body)
+        self.assertIn("sop-001.html", body)
+        self.assertIn("event: tool_call", body)
+        self.assertIn("event: evidence", body)
+        self.assertIn("event: answer_delta", body)
+        self.assertIn("event: done", body)
+
 
 if __name__ == "__main__":
     unittest.main()

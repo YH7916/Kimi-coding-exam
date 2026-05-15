@@ -29,6 +29,20 @@ class AppShellTest(unittest.TestCase):
                 self.assertEqual(response.status_code, 200)
                 self.assertIn("text/html", response.headers["content-type"])
 
+    def test_provider_status_does_not_expose_secrets(self):
+        """Provider status reports real/fallback mode without API keys."""
+        client = TestClient(create_app(test_mode=True))
+
+        response = client.get("/provider-status")
+        payload = response.json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["embedding"]["mode"], "fallback")
+        self.assertEqual(payload["chat"]["mode"], "fallback")
+        self.assertFalse(payload["cache"]["enabled"])
+        self.assertNotIn("api_key", response.text)
+        self.assertNotIn("sk-", response.text)
+
 
 if __name__ == "__main__":
     unittest.main()

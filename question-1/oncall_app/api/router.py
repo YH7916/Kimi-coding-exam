@@ -1,8 +1,11 @@
 """HTTP route declarations."""
 
+import json
+from collections.abc import Iterator
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query, Response, status
+from fastapi.responses import StreamingResponse
 
 from oncall_app.agent.assistant import OnCallAssistant
 from oncall_app.agent.evidence import EvidenceExtractor, EvidenceItem
@@ -13,6 +16,9 @@ from oncall_app.api.schemas import (
     DocumentCreate,
     DocumentCreated,
     DocumentDetail,
+    EmbeddingCacheStatus,
+    ProviderEndpointStatus,
+    ProviderStatusResponse,
     SearchResponse,
     chat_response,
     document_detail,
@@ -23,7 +29,13 @@ from oncall_app.documents.repository import DocumentRepository
 from oncall_app.llm.chat_client import ChatClient, create_chat_client
 from oncall_app.llm.config import chat_config_from_env, embedding_config_from_env
 from oncall_app.llm.embedding_client import EmbeddingClient, create_embedding_client
-from oncall_app.models import ConversationTurn, ToolCall
+from oncall_app.models import (
+    AgentResponse,
+    AgentStreamEvent,
+    ConversationTurn,
+    SearchResult,
+    ToolCall,
+)
 from oncall_app.retrieval.embeddings import EmbeddingCache
 from oncall_app.retrieval.service import RetrievalService
 
@@ -77,6 +89,67 @@ class SearchRuntime:
             history=turns,
         )
 
+    def chat_events(
+        self,
+        message: str,
+        history: list[ConversationTurn] | None = None,
+    ) -> Iterator[AgentStreamEvent]:
+        """Yield retrieval and Agent events for SSE streaming."""
+        turns = history or []
+        retrieval_query = _conversation_query(message, turns)
+        candidates = self.service.semantic_search(retrieval_query, limit=AGENT_CANDIDATE_LIMIT)
+        yield AgentStreamEvent(
+            type="retrieval",
+            payload={
+                "query": retrieval_query,
+                "candidates": candidates,
+            },
+        )
+        yield from self.assistant.stream_chat(
+            message,
+            retrieval_candidates=candidates,
+            history=turns,
+        )
+
+    def provider_status(self) -> ProviderStatusResponse:
+        """Return non-sensitive provider and cache status."""
+        embedding_config = embedding_config_from_env()
+        chat_config = chat_config_from_env()
+        embedding_configured = bool(
+            embedding_config.base_url
+            and embedding_config.api_key
+            and embedding_config.model
+        )
+        chat_configured = bool(
+            chat_config.base_url
+            and chat_config.api_key
+            and chat_config.model
+        )
+        embedding_is_real = (
+            not self.test_mode
+            and self.service.has_vector_index
+            and embedding_configured
+        )
+        chat_is_real = not self.test_mode and chat_configured
+        cache_stats = self.service.embedding_cache_stats
+        return ProviderStatusResponse(
+            embedding=_endpoint_status(
+                is_real=embedding_is_real,
+                model=embedding_config.model,
+                base_url=embedding_config.base_url,
+                real_detail="SiliconFlow embeddings active",
+                fallback_detail="deterministic semantic fallback active",
+            ),
+            chat=_endpoint_status(
+                is_real=chat_is_real,
+                model=chat_config.model,
+                base_url=chat_config.base_url,
+                real_detail="OpenAI-compatible Chat Completions active",
+                fallback_detail="local deterministic chat fallback active",
+            ),
+            cache=_cache_status(cache_stats),
+        )
+
     def _build_retrieval_service(self) -> RetrievalService:
         """Build v1/v2 retrieval with optional real embedding support."""
         embedding_client, embedding_cache = self._embedding_components()
@@ -115,6 +188,12 @@ class SearchRuntime:
 def health() -> dict[str, str]:
     """Return process health."""
     return {"status": "ok"}
+
+
+@router.get("/provider-status")
+def get_provider_status() -> ProviderStatusResponse:
+    """Return non-sensitive LLM provider and embedding cache status."""
+    return runtime.provider_status()
 
 
 @router.get("/v1", response_class=Response)
@@ -177,6 +256,21 @@ def v3_chat(payload: ChatRequest) -> ChatResponse:
     return chat_response(response, evidence)
 
 
+@router.post("/v3/chat/stream")
+def v3_chat_stream(payload: ChatRequest) -> StreamingResponse:
+    """Stream v3 Agent progress as Server-Sent Events."""
+    history = [
+        ConversationTurn(role=item.role, content=item.content)
+        for item in payload.history
+    ]
+    retrieval_query = _conversation_query(payload.message, history)
+    return StreamingResponse(
+        _chat_event_stream(payload.message, history, retrieval_query),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 def _normalize_query(q: str) -> str:
     """Normalize README query behavior."""
     return "&" if q == "" else q
@@ -192,6 +286,36 @@ def _chat_client(test_mode: bool) -> ChatClient:
     return LocalChatClient()
 
 
+def _endpoint_status(
+    is_real: bool,
+    model: str,
+    base_url: str,
+    real_detail: str,
+    fallback_detail: str,
+) -> ProviderEndpointStatus:
+    """Build one provider status without exposing credentials."""
+    return ProviderEndpointStatus(
+        mode="real" if is_real else "fallback",
+        model=model or None,
+        base_url=base_url or None,
+        detail=real_detail if is_real else fallback_detail,
+    )
+
+
+def _cache_status(cache_stats: dict[str, int | str] | None) -> EmbeddingCacheStatus:
+    """Build embedding cache status."""
+    if cache_stats is None:
+        return EmbeddingCacheStatus(enabled=False)
+    return EmbeddingCacheStatus(
+        enabled=True,
+        path=str(cache_stats.get("path") or ""),
+        entries=int(cache_stats.get("entries") or 0),
+        hits=int(cache_stats.get("hits") or 0),
+        misses=int(cache_stats.get("misses") or 0),
+        writes=int(cache_stats.get("writes") or 0),
+    )
+
+
 def _evidence_for_tool_calls(message: str, tool_calls: list[ToolCall]) -> list[EvidenceItem]:
     """Extract evidence for HTML files read by the agent."""
     documents = []
@@ -203,6 +327,82 @@ def _evidence_for_tool_calls(message: str, tool_calls: list[ToolCall]) -> list[E
         except KeyError:
             continue
     return EvidenceExtractor().extract(message, documents)
+
+
+def _chat_event_stream(
+    message: str,
+    history: list[ConversationTurn],
+    retrieval_query: str,
+) -> Iterator[str]:
+    """Serialize Agent stream events into SSE frames."""
+    try:
+        for event in runtime.chat_events(message, history=history):
+            yield _sse(event.type, _stream_payload(event, retrieval_query))
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        yield _sse("error", {"message": str(exc)})
+
+
+def _stream_payload(event: AgentStreamEvent, retrieval_query: str) -> dict[str, object]:
+    """Convert an AgentStreamEvent payload into JSON-safe data."""
+    if event.type == "retrieval":
+        candidates = event.payload.get("candidates", [])
+        return {
+            "query": str(event.payload.get("query") or ""),
+            "candidates": _candidate_items(candidates),
+        }
+    if event.type == "evidence":
+        evidence = event.payload.get("evidence", [])
+        return {"items": _evidence_items(evidence)}
+    if event.type == "done":
+        response = event.payload.get("response")
+        if not isinstance(response, AgentResponse):
+            return {"answer": ""}
+        evidence = _evidence_for_tool_calls(retrieval_query, response.tool_calls)
+        return chat_response(response, evidence).model_dump()
+    return event.payload
+
+
+def _candidate_items(candidates: object) -> list[dict[str, object]]:
+    """Return JSON-safe retrieval candidate summaries."""
+    if not isinstance(candidates, list):
+        return []
+    items = []
+    for candidate in candidates:
+        if not isinstance(candidate, SearchResult):
+            continue
+        items.append(
+            {
+                "id": candidate.doc_id,
+                "file": f"{candidate.doc_id}.html",
+                "title": candidate.title,
+                "snippet": candidate.snippet,
+                "score": candidate.score,
+            }
+        )
+    return items
+
+
+def _evidence_items(evidence: object) -> list[dict[str, str]]:
+    """Return JSON-safe evidence summaries."""
+    if not isinstance(evidence, list):
+        return []
+    items = []
+    for item in evidence:
+        if not isinstance(item, EvidenceItem):
+            continue
+        items.append(
+            {
+                "file": item.file,
+                "section": item.section_heading,
+                "text": item.text,
+            }
+        )
+    return items
+
+
+def _sse(event: str, data: dict[str, object]) -> str:
+    """Return one Server-Sent Event frame."""
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
 def _conversation_query(message: str, history: list[ConversationTurn]) -> str:

@@ -14,6 +14,9 @@ class EmbeddingCache:
     def __init__(self, path: Path | str, model: str):
         self.path = Path(path)
         self.model = model
+        self.hits = 0
+        self.misses = 0
+        self.writes = 0
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._ensure_schema()
 
@@ -47,6 +50,7 @@ class EmbeddingCache:
                         json.dumps(vector),
                     ),
                 )
+        self.writes += 1
 
     def get_or_create(
         self,
@@ -56,10 +60,28 @@ class EmbeddingCache:
         """Return a cached vector or create and store it."""
         cached = self.get(text)
         if cached is not None:
+            self.hits += 1
             return cached
+        self.misses += 1
         vector = embedder(text)
         self.set(text, vector)
         return vector
+
+    def stats(self) -> dict[str, int | str]:
+        """Return non-sensitive cache metrics for runtime status."""
+        with closing(sqlite3.connect(self.path)) as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) FROM embeddings WHERE model = ?",
+                (self.model,),
+            ).fetchone()
+        entries = int(row[0]) if row is not None else 0
+        return {
+            "path": str(self.path),
+            "entries": entries,
+            "hits": self.hits,
+            "misses": self.misses,
+            "writes": self.writes,
+        }
 
     def _cache_key(self, text: str) -> str:
         """Return a stable cache key for model and text."""

@@ -35,6 +35,8 @@ class FrontendStaticTest(unittest.TestCase):
         self.assertIn("/v1/search", js)
         self.assertIn("/v2/search", js)
         self.assertIn("/v3/chat", js)
+        self.assertIn("/v3/chat/stream", js)
+        self.assertIn("/provider-status", js)
         self.assertIn("visibleChatHistory", js)
         self.assertIn("JSON.stringify({ message, history })", js)
         self.assertIn("renderMarkdown", js)
@@ -44,6 +46,7 @@ class FrontendStaticTest(unittest.TestCase):
         self.assertIn("/documents/", js)
         self.assertIn("openSopModal", js)
         self.assertIn("data-sop-id", js)
+        self.assertIn("data-sop-section", js)
 
 
 if __name__ == "__main__":

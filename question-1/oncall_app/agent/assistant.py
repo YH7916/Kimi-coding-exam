@@ -1,10 +1,11 @@
 """Chat Completions tool-calling On-Call assistant."""
 
 import json
+from collections.abc import Iterator
 from pathlib import Path
 from typing import cast
 
-from oncall_app.agent.evidence import EvidenceExtractor
+from oncall_app.agent.evidence import EvidenceExtractor, EvidenceItem
 from oncall_app.agent.prompts import READ_FILE_TOOLS, SYSTEM_PROMPT
 from oncall_app.agent.state import ToolObservation
 from oncall_app.agent.synthesizer import format_evidence_context
@@ -13,10 +14,11 @@ from oncall_app.documents.parser import parse_document
 from oncall_app.documents.repository import DocumentRepository
 from oncall_app.llm.chat_client import ChatClient
 from oncall_app.llm.openai_compat import JsonObject
-from oncall_app.models import AgentResponse, ConversationTurn, SearchResult
+from oncall_app.models import AgentResponse, AgentStreamEvent, ConversationTurn, SearchResult
 
 MAX_TOOL_ROUNDS = 4
 MAX_HISTORY_MESSAGES = 8
+ANSWER_CHUNK_SIZE = 18
 
 
 class OnCallAssistant:  # pylint: disable=too-few-public-methods
@@ -61,14 +63,82 @@ class OnCallAssistant:  # pylint: disable=too-few-public-methods
                 round_observations.append(observation)
                 tool_calls.append(observation.call)
                 messages.append(_tool_message(tool_call, observation.content))
-            evidence_context = self._evidence_context(message, round_observations)
-            if evidence_context:
-                messages.append({"role": "system", "content": evidence_context})
+            evidence = self._extract_evidence(message, round_observations)
+            if evidence:
+                messages.append({"role": "system", "content": format_evidence_context(evidence)})
 
         return AgentResponse(
             answer="工具调用轮次已达到上限，请缩小问题范围后重试。",
             tool_calls=tool_calls,
             retrieval_candidates=candidates,
+        )
+
+    def stream_chat(
+        self,
+        message: str,
+        retrieval_candidates: list[SearchResult],
+        history: list[ConversationTurn] | None = None,
+    ) -> Iterator[AgentStreamEvent]:
+        """Yield observable Agent events while answering a user message."""
+        tool_calls: list = []
+        messages = self._initial_messages(message, retrieval_candidates, history or [])
+
+        for _ in range(self.max_tool_rounds):
+            response = self.chat_client.create_chat_completion(messages, READ_FILE_TOOLS)
+            assistant_message = _assistant_message(response)
+            messages.append(assistant_message)
+            requested_tools = _tool_calls(assistant_message)
+            if not requested_tools:
+                answer = str(assistant_message.get("content") or "")
+                yield from _answer_delta_events(answer)
+                yield AgentStreamEvent(
+                    type="done",
+                    payload={
+                        "response": AgentResponse(
+                            answer=answer,
+                            tool_calls=tool_calls,
+                            retrieval_candidates=retrieval_candidates,
+                        )
+                    },
+                )
+                return
+
+            round_observations: list[ToolObservation] = []
+            for tool_call in requested_tools:
+                fname = _tool_file_name(tool_call)
+                yield AgentStreamEvent(
+                    type="tool_call",
+                    payload={"tool": "readFile", "fname": fname},
+                )
+                observation = self._execute_tool_call(tool_call)
+                round_observations.append(observation)
+                tool_calls.append(observation.call)
+                messages.append(_tool_message(tool_call, observation.content))
+                yield AgentStreamEvent(
+                    type="observation",
+                    payload={
+                        "fname": observation.call.fname,
+                        "preview": observation.call.result_preview,
+                        "chars": len(observation.content),
+                    },
+                )
+
+            evidence = self._extract_evidence(message, round_observations)
+            if evidence:
+                messages.append({"role": "system", "content": format_evidence_context(evidence)})
+                yield AgentStreamEvent(type="evidence", payload={"evidence": evidence})
+
+        answer = "工具调用轮次已达到上限，请缩小问题范围后重试。"
+        yield from _answer_delta_events(answer)
+        yield AgentStreamEvent(
+            type="done",
+            payload={
+                "response": AgentResponse(
+                    answer=answer,
+                    tool_calls=tool_calls,
+                    retrieval_candidates=retrieval_candidates,
+                )
+            },
         )
 
     @staticmethod
@@ -92,15 +162,14 @@ class OnCallAssistant:  # pylint: disable=too-few-public-methods
         name = str(function.get("name", ""))
         if name != "readFile":
             raise ValueError(f"unsupported tool: {name}")
-        arguments = json.loads(str(function.get("arguments") or "{}"))
-        fname = str(arguments.get("fname", ""))
+        fname = _tool_file_name(tool_call)
         return self.read_file_tool.read_file(fname)
 
     @staticmethod
-    def _evidence_context(
+    def _extract_evidence(
         message: str,
         observations: list[ToolObservation],
-    ) -> str:
+    ) -> list[EvidenceItem]:
         """Extract evidence from SOP HTML tool observations."""
         documents = [
             parse_document(
@@ -112,9 +181,8 @@ class OnCallAssistant:  # pylint: disable=too-few-public-methods
             if observation.call.fname.endswith(".html")
         ]
         if not documents:
-            return ""
-        evidence = EvidenceExtractor().extract(message, documents)
-        return format_evidence_context(evidence)
+            return []
+        return EvidenceExtractor().extract(message, documents)
 
 
 def _assistant_message(response: JsonObject) -> JsonObject:
@@ -147,6 +215,13 @@ def _function_payload(tool_call: JsonObject) -> JsonObject:
     if not isinstance(function, dict):
         raise ValueError("tool call missing function payload")
     return cast(JsonObject, function)
+
+
+def _tool_file_name(tool_call: JsonObject) -> str:
+    """Extract the fname argument from a readFile tool call."""
+    function = _function_payload(tool_call)
+    arguments = json.loads(str(function.get("arguments") or "{}"))
+    return str(arguments.get("fname", ""))
 
 
 def _tool_message(tool_call: JsonObject, content: str) -> JsonObject:
@@ -186,3 +261,19 @@ def _history_messages(history: list[ConversationTurn]) -> list[JsonObject]:
             continue
         messages.append({"role": turn.role, "content": content})
     return messages
+
+
+def _answer_delta_events(answer: str) -> Iterator[AgentStreamEvent]:
+    """Emit answer chunks as SSE-friendly deltas."""
+    for chunk in _text_chunks(answer):
+        yield AgentStreamEvent(type="answer_delta", payload={"delta": chunk})
+
+
+def _text_chunks(text: str) -> list[str]:
+    """Split text into readable chunks without assuming whitespace-delimited Chinese."""
+    if not text:
+        return []
+    return [
+        text[index : index + ANSWER_CHUNK_SIZE]
+        for index in range(0, len(text), ANSWER_CHUNK_SIZE)
+    ]
