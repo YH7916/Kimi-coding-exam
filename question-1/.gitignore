@@ -4,6 +4,7 @@ __pycache__/
 .pylint.d/
 .mypy_cache/
 .cache/
+docs/
 .venv/
 venv/
 AGENTS.md
