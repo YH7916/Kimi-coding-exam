@@ -25,6 +25,12 @@ class SemanticSearchTest(unittest.TestCase):
 
         self.assertEqual(set(top_ids), {"sop-001", "sop-004"})
 
+    def test_compact_oom_question_ranks_backend_first(self):
+        """OOM怎么办 should rank the backend SOP first."""
+        results = semantic_search(self.documents, "OOM怎么办")
+
+        self.assertEqual(results[0].doc_id, "sop-001")
+
     def test_hacker_attack_ranks_security_first(self):
         """黑客攻击 should rank the security SOP first."""
         results = semantic_search(self.documents, "黑客攻击")

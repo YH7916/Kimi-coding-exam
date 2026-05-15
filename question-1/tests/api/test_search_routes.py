@@ -60,6 +60,13 @@ class SearchRouteTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["results"][0]["id"], "sop-005")
 
+    def test_v2_compact_oom_query(self):
+        """V2 semantic search should handle compact mixed OOM questions."""
+        response = self.client.get("/v2/search", params={"q": "OOM怎么办"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["results"][0]["id"], "sop-001")
+
     def test_runtime_can_wire_embedding_client(self):
         """Runtime builds a vector index when an embedding client is provided."""
         embedding_client = FakeEmbeddingClient()

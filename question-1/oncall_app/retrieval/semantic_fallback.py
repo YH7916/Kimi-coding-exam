@@ -19,6 +19,12 @@ class SemanticRule(TypedDict):
 
 SEMANTIC_RULES: tuple[SemanticRule, ...] = (
     {
+        "triggers": ("oom", "outofmemory", "内存溢出", "内存泄漏", "堆转储"),
+        "required_any": ("oom", "outofmemory", "内存", "堆转储", "jvm"),
+        "boosts": {"sop-001": 48.0},
+        "terms": ("OOM", "OutOfMemoryError", "内存", "堆转储", "JVM", "扩容", "回滚"),
+    },
+    {
         "triggers": ("p0", "响应流程", "升级流程", "战争室", "war room"),
         "required_any": ("p0", "响应", "升级", "故障"),
         "boosts": {"sop-001": 45.0, "sop-002": 42.0, "sop-005": 40.0, "sop-004": 36.0},
