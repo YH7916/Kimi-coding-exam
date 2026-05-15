@@ -9,43 +9,46 @@
 </head>
 <body>
   <header class="topbar">
-    <a class="brand" href="/v3" aria-label="On-Call Copilot home">On-Call Copilot</a>
+    <div class="topbar-left">
+      <button
+        id="history-button"
+        class="history-button"
+        type="button"
+        aria-label="Toggle history sidebar"
+        aria-expanded="false"
+        aria-controls="history-sidebar"
+      >
+        <img src="/static/assets/panel-left.svg" alt="" aria-hidden="true">
+      </button>
+      <a class="home-button" href="/v3" aria-label="Home">
+        <img src="/static/assets/house.svg" alt="" aria-hidden="true">
+      </a>
+    </div>
     <nav class="version-switcher" aria-label="Version switcher">
       <a data-mode="v1" href="/v1">v1 Search</a>
       <a data-mode="v2" href="/v2">v2 RAG</a>
       <a data-mode="v3" href="/v3">v3 Agent</a>
     </nav>
     <div class="topbar-tools">
+      <a
+        class="github-button"
+        href="https://github.com/YH7916/Kimi-coding-exam/"
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label="Open GitHub repository"
+      >
+        <img src="/static/assets/github-mark.svg" alt="" aria-hidden="true">
+      </a>
       <button
         id="settings-button"
         class="settings-button"
         type="button"
         aria-label="Runtime status and settings"
         aria-expanded="false"
-        aria-controls="settings-popover"
+        aria-controls="settings-sidebar"
       >
         <img src="/static/assets/settings-2.svg" alt="" aria-hidden="true">
       </button>
-      <section id="settings-popover" class="settings-popover" hidden>
-        <div class="settings-popover-header">
-          <span>运行状态</span>
-          <small id="settings-summary">正在检查</small>
-        </div>
-        <div id="provider-status-details" class="provider-status-details">
-          <p>正在加载运行状态...</p>
-        </div>
-        <div class="settings-group">
-          <span>界面</span>
-          <label>
-            <input id="setting-show-trace" type="checkbox">
-            显示工具调用过程
-          </label>
-          <label>
-            <input id="setting-section-jump" type="checkbox">
-            打开 SOP 时定位引用章节
-          </label>
-        </div>
-      </section>
     </div>
   </header>
   <main>

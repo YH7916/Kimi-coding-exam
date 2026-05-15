@@ -42,7 +42,13 @@ let mode = modeFromPath(window.location.pathname);
 let config = MODES[mode];
 const chatTurns = [];
 const SETTINGS_STORAGE_KEY = "oncall-copilot-settings";
+const HISTORY_STORAGE_KEY = "oncall-copilot-history";
+const MAX_HISTORY_ENTRIES = 24;
+const HISTORY_TITLE_CHARS = 48;
 const userSettings = loadUserSettings();
+let historyEntries = loadHistoryEntries();
+let activeHistoryId = null;
+let activeChatHistoryId = null;
 let pendingAssistantContentTurn = null;
 let pendingAssistantContentFrame = 0;
 
@@ -60,14 +66,132 @@ function loadUserSettings() {
     return {
       showTrace: saved.showTrace !== false,
       sectionJump: saved.sectionJump !== false,
+      historyOpen: saved.historyOpen === true,
+      settingsOpen: saved.settingsOpen === true,
     };
   } catch (_error) {
-    return { showTrace: true, sectionJump: true };
+    return { showTrace: true, sectionJump: true, historyOpen: false, settingsOpen: false };
   }
 }
 
 function saveUserSettings() {
   localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(userSettings));
+}
+
+function loadHistoryEntries() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(HISTORY_STORAGE_KEY) || "[]");
+    if (!Array.isArray(saved)) {
+      return [];
+    }
+    return saved
+      .filter((entry) => MODES[entry?.mode] && entry.id && entry.title)
+      .slice(0, MAX_HISTORY_ENTRIES);
+  } catch (_error) {
+    return [];
+  }
+}
+
+function saveHistoryEntries() {
+  localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(historyEntries));
+}
+
+function createHistoryId() {
+  if (window.crypto?.randomUUID) {
+    return window.crypto.randomUUID();
+  }
+  return `history-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function compactHistoryTitle(value) {
+  const normalized = String(value || "").replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return "Untitled";
+  }
+  if (normalized.length <= HISTORY_TITLE_CHARS) {
+    return normalized;
+  }
+  return `${normalized.slice(0, HISTORY_TITLE_CHARS - 1)}...`;
+}
+
+function recordSearchHistory(query) {
+  const normalizedQuery = String(query || "").trim();
+  if (!normalizedQuery) {
+    return;
+  }
+  const now = Date.now();
+  const existing = historyEntries.find(
+    (entry) => entry.mode === mode && entry.query === normalizedQuery && !entry.turns,
+  );
+  const entry = {
+    id: existing?.id || createHistoryId(),
+    mode,
+    title: compactHistoryTitle(normalizedQuery),
+    query: normalizedQuery,
+    createdAt: existing?.createdAt || now,
+    updatedAt: now,
+  };
+  activeHistoryId = entry.id;
+  historyEntries = [entry, ...historyEntries.filter((item) => item.id !== entry.id)].slice(
+    0,
+    MAX_HISTORY_ENTRIES,
+  );
+  saveHistoryEntries();
+}
+
+function serializeChatTurns() {
+  return chatTurns
+    .filter((turn) => ["user", "assistant", "error"].includes(turn.role))
+    .map((turn) => ({
+      role: turn.role,
+      content: turn.content || "",
+      evidence: turn.evidence || [],
+      trace: turn.trace || [],
+      toolCalls: turn.toolCalls || [],
+      streaming: false,
+    }));
+}
+
+function persistCurrentChatHistory() {
+  const firstUserTurn = chatTurns.find((turn) => turn.role === "user" && turn.content);
+  if (!firstUserTurn) {
+    return;
+  }
+  const now = Date.now();
+  const existing = historyEntries.find((entry) => entry.id === activeChatHistoryId);
+  const entry = {
+    id: existing?.id || createHistoryId(),
+    mode: "v3",
+    title: compactHistoryTitle(firstUserTurn.content),
+    query: firstUserTurn.content,
+    turns: serializeChatTurns(),
+    createdAt: existing?.createdAt || now,
+    updatedAt: now,
+  };
+  activeChatHistoryId = entry.id;
+  activeHistoryId = entry.id;
+  historyEntries = [entry, ...historyEntries.filter((item) => item.id !== entry.id)].slice(
+    0,
+    MAX_HISTORY_ENTRIES,
+  );
+  saveHistoryEntries();
+}
+
+function restoreChatTurns(turns) {
+  chatTurns.splice(
+    0,
+    chatTurns.length,
+    ...(Array.isArray(turns) ? turns : [])
+      .filter((turn) => ["user", "assistant", "error"].includes(turn?.role))
+      .map((turn) => ({
+        role: turn.role,
+        content: turn.content || "",
+        evidence: turn.evidence || [],
+        trace: turn.trace || [],
+        toolCalls: turn.toolCalls || [],
+        streaming: false,
+      })),
+  );
 }
 
 function escapeHtml(value) {
@@ -397,6 +521,151 @@ function setActiveNav() {
   });
 }
 
+function syncHistoryButtonState() {
+  const button = document.querySelector("#history-button");
+  if (!button) {
+    return;
+  }
+  button.setAttribute("aria-expanded", String(userSettings.historyOpen));
+  button.classList.toggle("is-active", userSettings.historyOpen);
+}
+
+function syncSettingsButtonState() {
+  const button = document.querySelector("#settings-button");
+  if (!button) {
+    return;
+  }
+  button.setAttribute("aria-expanded", String(userSettings.settingsOpen));
+  button.classList.toggle("is-active", userSettings.settingsOpen);
+}
+
+function syncPanelBackdropState() {
+  const backdrop = document.querySelector(".side-panel-backdrop");
+  if (backdrop) {
+    backdrop.hidden = !(userSettings.historyOpen || userSettings.settingsOpen);
+  }
+}
+
+function applyHistorySidebarState() {
+  document.body.classList.toggle("history-open", userSettings.historyOpen);
+  document.querySelector(".workspace-shell")?.classList.toggle(
+    "is-history-open",
+    userSettings.historyOpen,
+  );
+  syncPanelBackdropState();
+  const sidebar = document.querySelector("#history-sidebar");
+  if (sidebar) {
+    sidebar.setAttribute("aria-hidden", String(!userSettings.historyOpen));
+    if (userSettings.historyOpen) {
+      sidebar.removeAttribute("inert");
+      sidebar.innerHTML = renderHistorySidebar();
+    } else {
+      sidebar.setAttribute("inert", "");
+    }
+  }
+  syncHistoryButtonState();
+}
+
+function applySettingsSidebarState() {
+  document.body.classList.toggle("settings-open", userSettings.settingsOpen);
+  document.querySelector(".workspace-shell")?.classList.toggle(
+    "is-settings-open",
+    userSettings.settingsOpen,
+  );
+  syncPanelBackdropState();
+  const sidebar = document.querySelector("#settings-sidebar");
+  if (sidebar) {
+    sidebar.setAttribute("aria-hidden", String(!userSettings.settingsOpen));
+    if (userSettings.settingsOpen) {
+      sidebar.removeAttribute("inert");
+      sidebar.innerHTML = renderSettingsSidebar();
+      bindSettingsControls();
+      refreshProviderStatus();
+    } else {
+      sidebar.setAttribute("inert", "");
+    }
+  }
+  syncSettingsButtonState();
+}
+
+function setupHistoryButton() {
+  const button = document.querySelector("#history-button");
+  if (!button) {
+    return;
+  }
+  button.addEventListener("click", () => {
+    userSettings.historyOpen = !userSettings.historyOpen;
+    saveUserSettings();
+    applyHistorySidebarState();
+  });
+  syncHistoryButtonState();
+}
+
+function setupHistorySidebar() {
+  app.addEventListener("click", (event) => {
+    if (!(event.target instanceof Element)) {
+      return;
+    }
+    const deleteTrigger = event.target.closest("[data-history-delete-id]");
+    if (deleteTrigger) {
+      event.preventDefault();
+      deleteHistoryEntry(deleteTrigger.dataset.historyDeleteId || "");
+      return;
+    }
+    const trigger = event.target.closest("[data-history-id]");
+    if (!trigger) {
+      if (event.target.closest("[data-panel-dismiss]")) {
+        userSettings.historyOpen = false;
+        userSettings.settingsOpen = false;
+        saveUserSettings();
+        applyHistorySidebarState();
+        applySettingsSidebarState();
+      }
+      return;
+    }
+    event.preventDefault();
+    loadHistoryEntry(trigger.dataset.historyId || "");
+  });
+}
+
+function deleteHistoryEntry(id) {
+  if (!id) {
+    return;
+  }
+  historyEntries = historyEntries.filter((entry) => entry.id !== id);
+  if (activeHistoryId === id) {
+    activeHistoryId = null;
+  }
+  if (activeChatHistoryId === id) {
+    activeChatHistoryId = null;
+  }
+  saveHistoryEntries();
+  refreshHistorySidebar();
+}
+
+async function loadHistoryEntry(id) {
+  const entry = historyEntries.find((item) => item.id === id);
+  if (!entry) {
+    return;
+  }
+  activeHistoryId = entry.id;
+  if (entry.mode === "v3") {
+    activeChatHistoryId = entry.id;
+    restoreChatTurns(entry.turns || []);
+    switchMode("v3", true);
+    return;
+  }
+
+  switchMode(entry.mode, true);
+  const textarea = document.querySelector("#query-form textarea");
+  if (textarea) {
+    textarea.value = entry.query || entry.title;
+    textarea.style.height = "auto";
+    textarea.style.height = `${textarea.scrollHeight}px`;
+  }
+  await submitSearch(entry.query || entry.title, { record: false });
+}
+
 function switchMode(nextMode, pushState = false) {
   if (!MODES[nextMode]) {
     return;
@@ -437,23 +706,15 @@ function setupNavigation() {
   });
 }
 
-function setupSettingsPopover() {
-  const button = document.querySelector("#settings-button");
-  const popover = document.querySelector("#settings-popover");
+function bindSettingsControls() {
   const showTrace = document.querySelector("#setting-show-trace");
   const sectionJump = document.querySelector("#setting-section-jump");
-  if (!button || !popover || !showTrace || !sectionJump) {
+  if (!showTrace || !sectionJump) {
     return;
   }
 
   showTrace.checked = userSettings.showTrace;
   sectionJump.checked = userSettings.sectionJump;
-
-  button.addEventListener("click", () => {
-    const isOpening = popover.hidden;
-    popover.hidden = !isOpening;
-    button.setAttribute("aria-expanded", String(isOpening));
-  });
 
   showTrace.addEventListener("change", () => {
     userSettings.showTrace = showTrace.checked;
@@ -467,31 +728,43 @@ function setupSettingsPopover() {
     userSettings.sectionJump = sectionJump.checked;
     saveUserSettings();
   });
+}
 
-  document.addEventListener("click", (event) => {
-    if (!(event.target instanceof Element)) {
-      return;
-    }
-    if (popover.hidden || button.contains(event.target) || popover.contains(event.target)) {
-      return;
-    }
-    popover.hidden = true;
-    button.setAttribute("aria-expanded", "false");
+function setupSettingsPopover() {
+  const button = document.querySelector("#settings-button");
+  if (!button) {
+    return;
+  }
+
+  button.addEventListener("click", () => {
+    userSettings.settingsOpen = !userSettings.settingsOpen;
+    saveUserSettings();
+    applySettingsSidebarState();
   });
 
   document.addEventListener("keydown", (event) => {
-    if (event.key !== "Escape" || popover.hidden) {
+    if (event.key !== "Escape" || !(userSettings.historyOpen || userSettings.settingsOpen)) {
       return;
     }
-    popover.hidden = true;
-    button.setAttribute("aria-expanded", "false");
+    userSettings.historyOpen = false;
+    userSettings.settingsOpen = false;
+    saveUserSettings();
+    applyHistorySidebarState();
+    applySettingsSidebarState();
   });
+
+  syncSettingsButtonState();
 }
 
 function renderShell() {
   const activeChat = isActiveChat();
   document.body.classList.toggle("chat-active", activeChat);
-  app.innerHTML = activeChat ? renderChatShell() : renderHomeShell();
+  document.body.classList.toggle("history-open", userSettings.historyOpen);
+  document.body.classList.toggle("settings-open", userSettings.settingsOpen);
+  app.innerHTML = renderWorkspaceShell(activeChat ? renderChatShell() : renderHomeShell());
+  syncHistoryButtonState();
+  syncSettingsButtonState();
+  bindSettingsControls();
 
   const form = document.querySelector("#query-form");
   const textarea = form.querySelector("textarea");
@@ -543,6 +816,113 @@ function renderShell() {
   if (activeChat) {
     renderChatConversation();
   }
+}
+
+function renderWorkspaceShell(content) {
+  return `
+    <div class="workspace-shell ${userSettings.historyOpen ? "is-history-open" : ""} ${userSettings.settingsOpen ? "is-settings-open" : ""}">
+      <div
+        class="side-panel-backdrop"
+        ${userSettings.historyOpen || userSettings.settingsOpen ? "" : "hidden"}
+        data-panel-dismiss
+      ></div>
+      <aside
+        id="history-sidebar"
+        class="side-panel history-sidebar"
+        aria-label="聊天记录"
+        aria-hidden="${userSettings.historyOpen ? "false" : "true"}"
+        ${userSettings.historyOpen ? "" : "inert"}
+      >
+        ${renderHistorySidebar()}
+      </aside>
+      <aside
+        id="settings-sidebar"
+        class="side-panel settings-sidebar"
+        aria-label="运行设置"
+        aria-hidden="${userSettings.settingsOpen ? "false" : "true"}"
+        ${userSettings.settingsOpen ? "" : "inert"}
+      >
+        ${renderSettingsSidebar()}
+      </aside>
+      <div class="workspace-main">
+        ${content}
+      </div>
+    </div>
+  `;
+}
+
+function renderHistorySidebar() {
+  const entries = historyEntries.slice(0, MAX_HISTORY_ENTRIES);
+  const emptyState = `
+    <p class="history-empty">还没有记录。搜索或提问后会自动出现在这里。</p>
+  `;
+
+  return `
+    <div class="history-sidebar-header">
+      <span>聊天记录</span>
+    </div>
+    <div class="history-list">
+      ${
+        entries.length
+          ? entries.map((entry, index) => renderHistoryEntry(entry, index)).join("")
+          : emptyState
+      }
+    </div>
+  `;
+}
+
+function renderSettingsSidebar() {
+  return `
+    <div class="side-panel-header">
+      <span>运行状态</span>
+      <small id="settings-summary">正在检查</small>
+    </div>
+    <div id="provider-status-details" class="provider-status-details">
+      <p>正在加载运行状态...</p>
+    </div>
+    <div class="settings-group">
+      <span>界面</span>
+      <label>
+        <input id="setting-show-trace" type="checkbox" ${userSettings.showTrace ? "checked" : ""}>
+        显示工具调用过程
+      </label>
+      <label>
+        <input id="setting-section-jump" type="checkbox" ${userSettings.sectionJump ? "checked" : ""}>
+        打开 SOP 时定位引用章节
+      </label>
+    </div>
+  `;
+}
+
+function refreshHistorySidebar() {
+  const sidebar = document.querySelector("#history-sidebar");
+  if (sidebar && userSettings.historyOpen) {
+    sidebar.innerHTML = renderHistorySidebar();
+  }
+}
+
+function renderHistoryEntry(entry, index) {
+  const isCurrent = entry.id === activeHistoryId;
+  return `
+    <article class="history-entry ${isCurrent ? "is-current" : ""}" style="--i: ${index}">
+      <button
+        type="button"
+        class="history-entry-load"
+        data-history-id="${escapeHtml(entry.id)}"
+      >
+        <span class="history-mode-tag">${escapeHtml(entry.mode)}</span>
+        <span class="history-entry-title">${escapeHtml(entry.title)}</span>
+      </button>
+      <button
+        type="button"
+        class="history-delete-button"
+        data-history-delete-id="${escapeHtml(entry.id)}"
+        aria-label="删除 ${escapeHtml(entry.title)}"
+      >
+        <img src="/static/assets/trash-2.svg" alt="" aria-hidden="true">
+      </button>
+    </article>
+  `;
 }
 
 function renderHomeShell() {
@@ -600,7 +980,7 @@ function renderError(message) {
   `;
 }
 
-async function submitSearch(q) {
+async function submitSearch(q, options = {}) {
   renderLoading(mode === "v1" ? "Searching keywords" : "Retrieving evidence");
   try {
     const response = await fetch(`${config.endpoint}?q=${encodeURIComponent(q)}`);
@@ -609,6 +989,10 @@ async function submitSearch(q) {
     }
     const payload = await response.json();
     renderSearchResults(payload.results || []);
+    if (options.record !== false) {
+      recordSearchHistory(q);
+      refreshHistorySidebar();
+    }
     refreshProviderStatus();
   } catch (error) {
     renderError(error.message || "Unknown error");
@@ -654,6 +1038,9 @@ function renderSearchResults(results) {
 
 async function submitChat(message) {
   const history = visibleChatHistory();
+  if (!chatTurns.some((turn) => turn.role === "user" || turn.role === "assistant")) {
+    activeChatHistoryId = null;
+  }
   chatTurns.push({ role: "user", content: String(message) });
   const assistantTurn = {
     role: "assistant",
@@ -689,6 +1076,8 @@ async function submitChat(message) {
     applyChatFailure(assistantTurn, error.message || "Unknown error");
     renderShell();
   } finally {
+    persistCurrentChatHistory();
+    renderShell();
     refreshProviderStatus();
   }
 }
@@ -799,7 +1188,7 @@ function applyChatStreamEvent(turn, event) {
     turn.streaming = false;
     turn.content = data.answer || turn.content || "";
     turn.evidence = data.evidence || turn.evidence || [];
-    turn.trace = data.trace || turn.trace || [];
+    turn.trace = mergeTraceEvents(turn.trace || [], data.trace || []);
     turn.toolCalls = data.tool_calls || turn.toolCalls || [];
     return "full";
   }
@@ -814,6 +1203,18 @@ function applyChatStreamEvent(turn, event) {
     applyChatFailure(turn, data.message || "Streaming request failed");
   }
   return "full";
+}
+
+function mergeTraceEvents(existingTrace, finalTrace) {
+  const seen = new Set();
+  return [...existingTrace, ...finalTrace].filter((item) => {
+    const key = `${item.type}:${item.message}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
 }
 
 function applyChatFailure(turn, message) {
@@ -854,41 +1255,14 @@ function streamingPlaceholder(turn) {
   return "Retrieving SOP evidence...";
 }
 
-function latestAssistantTurn() {
-  for (let index = chatTurns.length - 1; index >= 0; index -= 1) {
-    if (chatTurns[index].role === "assistant") {
-      return chatTurns[index];
-    }
-  }
-  return null;
-}
-
 function renderChatConversation() {
-  const latest = latestAssistantTurn();
-  const trace = latest?.trace || [];
-  const toolCalls = latest?.toolCalls || [];
-  const tracePanel = userSettings.showTrace
-    ? `
-      <aside class="trace-panel">
-        <div class="section-heading">
-          <h2>Trace</h2>
-          <span>${toolCalls.length} tool calls</span>
-        </div>
-        <div class="trace-list">
-          ${renderTrace(trace)}
-        </div>
-      </aside>
-    `
-    : "";
-
   document.querySelector("#results").innerHTML = `
-    <div class="agent-layout chat-agent-layout ${userSettings.showTrace ? "" : "is-trace-hidden"} result-enter">
+    <div class="agent-layout chat-agent-layout result-enter">
       <section class="answer-panel chat-thread-panel">
         <div class="chat-list">
           ${chatTurns.map((turn, index) => renderChatTurn(turn, index)).join("")}
         </div>
       </section>
-      ${tracePanel}
     </div>
   `;
 }
@@ -953,6 +1327,7 @@ function renderChatTurn(turn, index) {
   }
   return `
     <article class="chat-message chat-message-assistant" data-turn-index="${index}" style="--i: ${index}">
+      ${renderInlineTrace(turn)}
       <div class="markdown-body">${renderAssistantBody(turn)}</div>
       ${renderEvidence(turn.evidence || [])}
     </article>
@@ -970,21 +1345,80 @@ function renderAssistantBody(turn) {
   `;
 }
 
-function renderTrace(trace) {
+function renderInlineTrace(turn) {
+  const trace = userSettings.showTrace ? turn.trace || [] : [];
   if (!trace.length) {
-    return `
-      <article class="trace-item">
-        <span>conversation</span>
-        <p>Ask a question to see retrieval and readFile calls.</p>
-      </article>
-    `;
+    return "";
   }
-  return trace.map((item, index) => `
-    <article class="trace-item" style="--i: ${index}">
-      <span>${escapeHtml(item.type)}</span>
-      <p>${escapeHtml(item.message)}</p>
-    </article>
-  `).join("");
+  const toolCallCount = (turn.toolCalls || []).length;
+  const hasEvidence = (turn.evidence || []).length > 0;
+  if (!toolCallCount && !hasEvidence && turn.streaming) {
+    return "";
+  }
+  const visibleTrace = trace.filter((item) => item.type !== "answer").slice(0, 4);
+  if (!visibleTrace.length && !toolCallCount) {
+    return "";
+  }
+  const workflowSteps = [
+    ...visibleTrace.map((item) => ({
+      label: compactTraceType(item.type),
+      message: compactTraceMessage(item.message),
+    })),
+  ];
+  if (turn.content || turn.streaming) {
+    workflowSteps.push({
+      label: "输出",
+      message: turn.streaming ? "正在生成回答" : "回答已生成",
+    });
+  }
+  return `
+    <section class="inline-trace" aria-label="工具调用过程">
+      <div class="inline-trace-header">
+        <span>过程</span>
+        <small>${toolCallCount ? `${toolCallCount} 次 readFile` : "检索完成"}</small>
+      </div>
+      <ol class="inline-trace-list">
+        ${workflowSteps.map((item, index) => `
+          <li class="inline-trace-step ${turn.streaming && index === workflowSteps.length - 1 ? "is-active" : ""}" style="--i: ${index}">
+            <span class="inline-trace-dot" aria-hidden="true"></span>
+            <div>
+              <strong>${escapeHtml(item.label)}</strong>
+              <p>${escapeHtml(item.message)}</p>
+            </div>
+          </li>
+        `).join("")}
+      </ol>
+    </section>
+  `;
+}
+
+function compactTraceType(type) {
+  if (type === "tool_call") {
+    return "readFile";
+  }
+  if (type === "retrieval") {
+    return "检索";
+  }
+  if (type === "observation") {
+    return "读取";
+  }
+  if (type === "evidence") {
+    return "证据";
+  }
+  if (type === "warning") {
+    return "提示";
+  }
+  if (type === "error") {
+    return "错误";
+  }
+  return String(type || "trace");
+}
+
+function compactTraceMessage(message) {
+  return String(message || "")
+    .replace("v2 hybrid retrieval candidates: ", "")
+    .replace(" cited sections extracted", " sections")
+    .replace(" loaded", "");
 }
 
 function renderEvidence(evidence) {
@@ -1161,6 +1595,8 @@ function closeSopModal() {
 }
 
 setupNavigation();
+setupHistoryButton();
+setupHistorySidebar();
 setupSettingsPopover();
 setupSopPreview();
 setActiveNav();
