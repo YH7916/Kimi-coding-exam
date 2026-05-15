@@ -1,5 +1,7 @@
 """Pydantic schemas for HTTP APIs."""
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from oncall_app.agent.evidence import EvidenceItem
@@ -39,10 +41,18 @@ class DocumentCreated(BaseModel):
     title: str
 
 
+class ChatHistoryItem(BaseModel):
+    """One previous visible chat turn supplied by the frontend."""
+
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1)
+
+
 class ChatRequest(BaseModel):
     """Request body for v3 chat."""
 
     message: str = Field(min_length=1)
+    history: list[ChatHistoryItem] = Field(default_factory=list, max_length=12)
 
 
 class ToolCallItem(BaseModel):

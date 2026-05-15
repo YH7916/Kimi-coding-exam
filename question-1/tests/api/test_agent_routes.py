@@ -40,6 +40,26 @@ class AgentRouteTest(unittest.TestCase):
         self.assertTrue(all(len(item["section"]) <= 80 for item in payload["evidence"]))
         self.assertTrue(all(len(item["text"]) <= 240 for item in payload["evidence"]))
 
+    def test_v3_chat_accepts_history_for_followups(self):
+        """Follow-up questions can carry previous visible chat turns."""
+        client = TestClient(create_app(test_mode=True))
+
+        response = client.post(
+            "/v3/chat",
+            json={
+                "message": "那升级条件呢？",
+                "history": [
+                    {"role": "user", "content": "服务 OOM 了怎么办？"},
+                    {"role": "assistant", "content": "先保存堆转储文件。"},
+                ],
+            },
+        )
+        payload = response.json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("sop-001.html", payload["trace"][0]["message"])
+        self.assertTrue(any("升级" in item["section"] for item in payload["evidence"]))
+
 
 if __name__ == "__main__":
     unittest.main()

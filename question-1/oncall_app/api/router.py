@@ -21,7 +21,7 @@ from oncall_app.documents.repository import DocumentRepository
 from oncall_app.llm.chat_client import ChatClient, create_chat_client
 from oncall_app.llm.config import chat_config_from_env, embedding_config_from_env
 from oncall_app.llm.embedding_client import EmbeddingClient, create_embedding_client
-from oncall_app.models import ToolCall
+from oncall_app.models import ConversationTurn, ToolCall
 from oncall_app.retrieval.embeddings import EmbeddingCache
 from oncall_app.retrieval.service import RetrievalService
 
@@ -29,6 +29,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = PROJECT_ROOT / "data"
 EMBEDDING_CACHE_PATH = PROJECT_ROOT / ".cache" / "embeddings.sqlite3"
 AGENT_CANDIDATE_LIMIT = 5
+RETRIEVAL_HISTORY_TURNS = 4
+MAX_RETRIEVAL_QUERY_CHARS = 800
 
 router = APIRouter()
 
@@ -62,10 +64,16 @@ class SearchRuntime:
         self.service = self._build_retrieval_service()
         self.assistant = self._build_assistant()
 
-    def chat(self, message: str):
+    def chat(self, message: str, history: list[ConversationTurn] | None = None):
         """Answer with v2 hybrid retrieval candidates feeding the v3 Agent."""
-        candidates = self.service.semantic_search(message, limit=AGENT_CANDIDATE_LIMIT)
-        return self.assistant.chat(message, retrieval_candidates=candidates)
+        turns = history or []
+        retrieval_query = _conversation_query(message, turns)
+        candidates = self.service.semantic_search(retrieval_query, limit=AGENT_CANDIDATE_LIMIT)
+        return self.assistant.chat(
+            message,
+            retrieval_candidates=candidates,
+            history=turns,
+        )
 
     def _build_retrieval_service(self) -> RetrievalService:
         """Build v1/v2 retrieval with optional real embedding support."""
@@ -144,8 +152,13 @@ def v2_search(q: str = Query(default="")) -> SearchResponse:
 @router.post("/v3/chat")
 def v3_chat(payload: ChatRequest) -> ChatResponse:
     """Answer an On-Call question with a traceable tool-using Agent."""
-    response = runtime.chat(payload.message)
-    evidence = _evidence_for_tool_calls(payload.message, response.tool_calls)
+    history = [
+        ConversationTurn(role=item.role, content=item.content)
+        for item in payload.history
+    ]
+    retrieval_query = _conversation_query(payload.message, history)
+    response = runtime.chat(payload.message, history=history)
+    evidence = _evidence_for_tool_calls(retrieval_query, response.tool_calls)
     return chat_response(response, evidence)
 
 
@@ -175,6 +188,19 @@ def _evidence_for_tool_calls(message: str, tool_calls: list[ToolCall]) -> list[E
         except KeyError:
             continue
     return EvidenceExtractor().extract(message, documents)
+
+
+def _conversation_query(message: str, history: list[ConversationTurn]) -> str:
+    """Build a compact retrieval query from recent user-visible context."""
+    recent_user_turns = [
+        turn.content.strip()
+        for turn in history[-RETRIEVAL_HISTORY_TURNS:]
+        if turn.role == "user" and turn.content.strip()
+    ]
+    combined = " ".join([*recent_user_turns, message.strip()]).strip()
+    if len(combined) <= MAX_RETRIEVAL_QUERY_CHARS:
+        return combined
+    return combined[-MAX_RETRIEVAL_QUERY_CHARS:]
 
 
 runtime = SearchRuntime(DATA_DIR, test_mode=True)

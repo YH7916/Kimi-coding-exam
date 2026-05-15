@@ -1,6 +1,7 @@
 """Shared data models for the On-Call assistant."""
 
 from dataclasses import dataclass, field
+from typing import Literal
 
 
 @dataclass(frozen=True)
@@ -41,6 +42,14 @@ class ToolCall:
     tool: str
     fname: str
     result_preview: str
+
+
+@dataclass(frozen=True)
+class ConversationTurn:
+    """One user-visible chat turn passed between the UI and Agent."""
+
+    role: Literal["user", "assistant"]
+    content: str
 
 
 @dataclass(frozen=True)

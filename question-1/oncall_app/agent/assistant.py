@@ -13,9 +13,10 @@ from oncall_app.documents.parser import parse_document
 from oncall_app.documents.repository import DocumentRepository
 from oncall_app.llm.chat_client import ChatClient
 from oncall_app.llm.openai_compat import JsonObject
-from oncall_app.models import AgentResponse, SearchResult
+from oncall_app.models import AgentResponse, ConversationTurn, SearchResult
 
 MAX_TOOL_ROUNDS = 4
+MAX_HISTORY_MESSAGES = 8
 
 
 class OnCallAssistant:  # pylint: disable=too-few-public-methods
@@ -36,11 +37,12 @@ class OnCallAssistant:  # pylint: disable=too-few-public-methods
         self,
         message: str,
         retrieval_candidates: list[SearchResult],
+        history: list[ConversationTurn] | None = None,
     ) -> AgentResponse:
         """Answer a user message with tool-calling."""
         candidates = retrieval_candidates
         tool_calls: list = []
-        messages = self._initial_messages(message, candidates)
+        messages = self._initial_messages(message, candidates, history or [])
 
         for _ in range(self.max_tool_rounds):
             response = self.chat_client.create_chat_completion(messages, READ_FILE_TOOLS)
@@ -73,12 +75,14 @@ class OnCallAssistant:  # pylint: disable=too-few-public-methods
     def _initial_messages(
         message: str,
         retrieval_candidates: list[SearchResult],
+        history: list[ConversationTurn],
     ) -> list[JsonObject]:
         """Build initial Chat Completions messages."""
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "system", "content": _candidate_context(retrieval_candidates)},
         ]
+        messages.extend(_history_messages(history))
         messages.append({"role": "user", "content": message})
         return messages
 
@@ -171,3 +175,14 @@ def _candidate_context(candidates: list[SearchResult]) -> str:
             f"score={candidate.score}; snippet={candidate.snippet}"
         )
     return "\n".join(lines)
+
+
+def _history_messages(history: list[ConversationTurn]) -> list[JsonObject]:
+    """Convert recent visible turns into Chat Completions messages."""
+    messages = []
+    for turn in history[-MAX_HISTORY_MESSAGES:]:
+        content = turn.content.strip()
+        if not content:
+            continue
+        messages.append({"role": turn.role, "content": content})
+    return messages

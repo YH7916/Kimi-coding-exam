@@ -423,6 +423,49 @@ h1 {
   animation: surface-in 380ms var(--ease-out-quart) both;
 }
 
+.chat-list {
+  display: grid;
+  gap: 14px;
+}
+
+.chat-message {
+  width: min(100%, 720px);
+  padding: 16px 18px;
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  animation: item-rise 420ms var(--ease-out-quart) both;
+  animation-delay: calc(var(--i, 0) * 42ms);
+}
+
+.chat-message small {
+  display: block;
+  margin-bottom: 7px;
+  color: var(--faint);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.chat-message-user {
+  justify-self: end;
+  max-width: min(82%, 560px);
+  background: #f1f1f0;
+}
+
+.chat-message-user p {
+  margin-bottom: 0;
+  color: var(--text);
+  line-height: 1.6;
+}
+
+.chat-message-assistant {
+  justify-self: start;
+}
+
+.chat-loading {
+  animation: item-rise 420ms var(--ease-out-quart) both;
+}
+
 pre {
   margin: 0;
   white-space: pre-wrap;

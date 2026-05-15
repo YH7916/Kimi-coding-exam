@@ -39,6 +39,7 @@ function modeFromPath(pathname) {
 
 let mode = modeFromPath(window.location.pathname);
 let config = MODES[mode];
+const chatTurns = [];
 
 function escapeHtml(value) {
   return String(value)
@@ -173,6 +174,10 @@ function renderShell() {
       submitButton.disabled = false;
     }
   });
+
+  if (mode === "v3" && chatTurns.length) {
+    renderChatConversation();
+  }
 }
 
 function renderLoading(label) {
@@ -245,56 +250,142 @@ function renderSearchResults(results) {
 }
 
 async function submitChat(message) {
-  renderLoading("Reading SOP evidence");
+  const history = visibleChatHistory();
+  chatTurns.push({ role: "user", content: String(message) });
+  chatTurns.push({ role: "pending", content: "Reading SOP evidence" });
+  renderChatConversation();
   try {
     const response = await fetch(config.endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message }),
+      body: JSON.stringify({ message, history }),
     });
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
     }
     const payload = await response.json();
-    renderChatResult(payload);
+    removePendingTurn();
+    chatTurns.push({
+      role: "assistant",
+      content: payload.answer || "",
+      evidence: payload.evidence || [],
+      trace: payload.trace || [],
+      toolCalls: payload.tool_calls || [],
+    });
+    renderChatConversation();
   } catch (error) {
-    renderError(error.message || "Unknown error");
+    removePendingTurn();
+    chatTurns.push({
+      role: "error",
+      content: error.message || "Unknown error",
+    });
+    renderChatConversation();
   }
 }
 
-function renderChatResult(payload) {
-  const trace = payload.trace || [];
-  const evidence = payload.evidence || [];
-  const toolCalls = payload.tool_calls || [];
+function visibleChatHistory() {
+  return chatTurns
+    .filter((turn) => turn.role === "user" || turn.role === "assistant")
+    .map((turn) => ({ role: turn.role, content: turn.content }));
+}
+
+function removePendingTurn() {
+  for (let index = chatTurns.length - 1; index >= 0; index -= 1) {
+    if (chatTurns[index].role === "pending") {
+      chatTurns.splice(index, 1);
+      return;
+    }
+  }
+}
+
+function latestAssistantTurn() {
+  for (let index = chatTurns.length - 1; index >= 0; index -= 1) {
+    if (chatTurns[index].role === "assistant") {
+      return chatTurns[index];
+    }
+  }
+  return null;
+}
+
+function renderChatConversation() {
+  const latest = latestAssistantTurn();
+  const trace = latest?.trace || [];
+  const toolCalls = latest?.toolCalls || [];
+  const visibleTurns = chatTurns.filter((turn) => turn.role !== "pending").length;
 
   document.querySelector("#results").innerHTML = `
     <div class="agent-layout result-enter">
       <section class="answer-panel">
         <div class="section-heading">
-          <h2>${escapeHtml(config.resultTitle)}</h2>
-          <span>${toolCalls.length} tool calls</span>
+          <h2>Conversation</h2>
+          <span>${visibleTurns} turns</span>
         </div>
-        <article class="answer-card">
-          <pre>${escapeHtml(payload.answer || "")}</pre>
-        </article>
-        ${renderEvidence(evidence)}
+        <div class="chat-list">
+          ${chatTurns.map((turn, index) => renderChatTurn(turn, index)).join("")}
+        </div>
       </section>
       <aside class="trace-panel">
         <div class="section-heading">
           <h2>Trace</h2>
-          <span>visible</span>
+          <span>${toolCalls.length} tool calls</span>
         </div>
         <div class="trace-list">
-          ${trace.map((item, index) => `
-            <article class="trace-item" style="--i: ${index}">
-              <span>${escapeHtml(item.type)}</span>
-              <p>${escapeHtml(item.message)}</p>
-            </article>
-          `).join("")}
+          ${renderTrace(trace)}
         </div>
       </aside>
     </div>
   `;
+}
+
+function renderChatTurn(turn, index) {
+  if (turn.role === "pending") {
+    return `
+      <div class="loading-row chat-loading" style="--i: ${index}">
+        <span class="spinner" aria-hidden="true"></span>
+        <span>${escapeHtml(turn.content)}</span>
+      </div>
+    `;
+  }
+  if (turn.role === "error") {
+    return `
+      <article class="notice-card chat-message" style="--i: ${index}">
+        <strong>Request failed</strong>
+        <p>${escapeHtml(turn.content)}</p>
+      </article>
+    `;
+  }
+  if (turn.role === "user") {
+    return `
+      <article class="chat-message chat-message-user" style="--i: ${index}">
+        <small>You</small>
+        <p>${escapeHtml(turn.content)}</p>
+      </article>
+    `;
+  }
+  return `
+    <article class="chat-message chat-message-assistant" style="--i: ${index}">
+      <small>Assistant</small>
+      <pre>${escapeHtml(turn.content || "")}</pre>
+      ${renderEvidence(turn.evidence || [])}
+    </article>
+  `;
+}
+
+function renderTrace(trace) {
+  if (!trace.length) {
+    return `
+      <article class="trace-item">
+        <span>conversation</span>
+        <p>Ask a question to see retrieval and readFile calls.</p>
+      </article>
+    `;
+  }
+  return trace.map((item, index) => `
+    <article class="trace-item" style="--i: ${index}">
+      <span>${escapeHtml(item.type)}</span>
+      <p>${escapeHtml(item.message)}</p>
+    </article>
+  `).join("");
 }
 
 function renderEvidence(evidence) {

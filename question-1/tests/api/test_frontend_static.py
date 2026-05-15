@@ -35,6 +35,8 @@ class FrontendStaticTest(unittest.TestCase):
         self.assertIn("/v1/search", js)
         self.assertIn("/v2/search", js)
         self.assertIn("/v3/chat", js)
+        self.assertIn("visibleChatHistory", js)
+        self.assertIn("JSON.stringify({ message, history })", js)
 
 
 if __name__ == "__main__":
