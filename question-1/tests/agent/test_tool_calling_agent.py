@@ -60,6 +60,21 @@ class FakeChatClient:
         }
 
 
+class TimeoutAfterToolChatClient(FakeChatClient):
+    """Fake client that times out while synthesizing the final answer."""
+
+    def create_chat_completion(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Return a tool call first, then fail like a slow provider."""
+        if not self.calls:
+            return super().create_chat_completion(messages, tools)
+        self.calls.append({"messages": messages, "tools": tools})
+        raise TimeoutError("timed out")
+
+
 class ToolCallingAgentTest(unittest.TestCase):
     """Agent uses Chat Completions tool calls."""
 
@@ -137,6 +152,42 @@ class ToolCallingAgentTest(unittest.TestCase):
         self.assertEqual(messages[current_user_index]["role"], "user")
         self.assertLess(history_user_index, history_assistant_index)
         self.assertLess(history_assistant_index, current_user_index)
+
+    def test_stream_chat_falls_back_when_final_answer_times_out(self):
+        """Streaming keeps read evidence instead of turning the whole answer into an error."""
+        chat_client = TimeoutAfterToolChatClient()
+        assistant = OnCallAssistant(
+            repository=DocumentRepository(DATA_DIR),
+            chat_client=chat_client,
+        )
+
+        events = list(
+            assistant.stream_chat(
+                "服务 OOM 了怎么办？",
+                retrieval_candidates=[
+                    SearchResult(
+                        doc_id="sop-001",
+                        title="后端服务 On-Call SOP",
+                        snippet="单服务 OOM 崩溃",
+                        score=1.0,
+                    )
+                ],
+            )
+        )
+        event_types = [event.type for event in events]
+        answer = "".join(
+            str(event.payload.get("delta") or "")
+            for event in events
+            if event.type == "answer_delta"
+        )
+
+        self.assertIn("tool_call", event_types)
+        self.assertIn("evidence", event_types)
+        self.assertIn("warning", event_types)
+        self.assertIn("answer_delta", event_types)
+        self.assertEqual(event_types[-1], "done")
+        self.assertIn("sop-001.html", answer)
+        self.assertIn("兜底回答", answer)
 
 
 if __name__ == "__main__":

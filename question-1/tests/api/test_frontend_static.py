@@ -43,6 +43,8 @@ class FrontendStaticTest(unittest.TestCase):
         self.assertIn("setupSettingsPopover", js)
         self.assertIn("setting-show-trace", js)
         self.assertIn("visibleChatHistory", js)
+        self.assertIn("applyChatFailure", js)
+        self.assertIn("streamingPlaceholder", js)
         self.assertIn("JSON.stringify({ message, history })", js)
         self.assertIn("renderMarkdown", js)
         self.assertIn("markdown-body", js)

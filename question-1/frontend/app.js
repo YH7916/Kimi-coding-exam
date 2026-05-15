@@ -584,9 +584,7 @@ async function submitChat(message) {
     assistantTurn.streaming = false;
     renderShell();
   } catch (error) {
-    assistantTurn.role = "error";
-    assistantTurn.streaming = false;
-    assistantTurn.content = error.message || "Unknown error";
+    applyChatFailure(assistantTurn, error.message || "Unknown error");
     renderShell();
   } finally {
     refreshProviderStatus();
@@ -703,11 +701,54 @@ function applyChatStreamEvent(turn, event) {
     turn.toolCalls = data.tool_calls || turn.toolCalls || [];
     return;
   }
-  if (event.type === "error") {
-    turn.role = "error";
-    turn.streaming = false;
-    turn.content = data.message || "Streaming request failed";
+  if (event.type === "warning") {
+    turn.trace = [
+      ...(turn.trace || []),
+      { type: "warning", message: data.message || "Agent finished with a fallback answer" },
+    ];
+    return;
   }
+  if (event.type === "error") {
+    applyChatFailure(turn, data.message || "Streaming request failed");
+  }
+}
+
+function applyChatFailure(turn, message) {
+  turn.streaming = false;
+  if (hasPartialAgentState(turn)) {
+    turn.trace = [
+      ...(turn.trace || []),
+      { type: "error", message },
+    ];
+    if (!turn.content) {
+      turn.content = "模型生成最终回答时失败，但已经保留上方读取到的 SOP 证据和工具调用过程。";
+    }
+    return;
+  }
+  turn.role = "error";
+  turn.content = message;
+}
+
+function hasPartialAgentState(turn) {
+  return Boolean(
+    turn.content
+      || (turn.evidence || []).length
+      || (turn.trace || []).length
+      || (turn.toolCalls || []).length,
+  );
+}
+
+function streamingPlaceholder(turn) {
+  if ((turn.evidence || []).length) {
+    return "已读取 SOP 证据，正在生成回答...";
+  }
+  if ((turn.toolCalls || []).length) {
+    return "正在读取相关 SOP...";
+  }
+  if ((turn.trace || []).length) {
+    return "正在检索相关 SOP...";
+  }
+  return "Retrieving SOP evidence...";
 }
 
 function latestAssistantTurn() {
@@ -786,7 +827,7 @@ function renderChatTurn(turn, index) {
         ${
           turn.content
             ? renderMarkdown(turn.content)
-            : `<p class="stream-placeholder">Retrieving SOP evidence...</p>`
+            : `<p class="stream-placeholder">${escapeHtml(streamingPlaceholder(turn))}</p>`
         }
         ${turn.streaming ? `<span class="stream-cursor" aria-hidden="true"></span>` : ""}
       </div>

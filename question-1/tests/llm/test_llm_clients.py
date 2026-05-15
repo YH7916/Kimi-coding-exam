@@ -4,8 +4,9 @@
 
 import unittest
 from typing import Any
+from unittest.mock import patch
 
-from oncall_app.llm.config import ProviderConfig
+from oncall_app.llm.config import DEFAULT_CHAT_TIMEOUT_SECONDS, ProviderConfig, chat_config_from_env
 from oncall_app.llm.openai_compat import OpenAICompatClient
 
 
@@ -69,6 +70,20 @@ class OpenAICompatClientTest(unittest.TestCase):
         self.assertEqual(transport.last_payload["messages"][0]["content"], "hi")
         self.assertEqual(transport.last_payload["tools"], [])
         self.assertEqual(result["choices"][0]["message"]["content"], "ok")
+
+    def test_chat_config_uses_longer_default_timeout(self):
+        """Chat synthesis has more time than short embedding requests."""
+        with patch.dict("os.environ", {}, clear=True):
+            config = chat_config_from_env()
+
+        self.assertEqual(config.timeout_seconds, DEFAULT_CHAT_TIMEOUT_SECONDS)
+
+    def test_chat_timeout_can_be_overridden(self):
+        """Operators can tune slow proxy calls without code changes."""
+        with patch.dict("os.environ", {"ONCALL_CHAT_TIMEOUT_SECONDS": "75"}, clear=True):
+            config = chat_config_from_env()
+
+        self.assertEqual(config.timeout_seconds, 75.0)
 
 
 if __name__ == "__main__":

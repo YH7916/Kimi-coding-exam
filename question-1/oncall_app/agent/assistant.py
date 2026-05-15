@@ -8,7 +8,10 @@ from typing import cast
 from oncall_app.agent.evidence import EvidenceExtractor, EvidenceItem
 from oncall_app.agent.prompts import READ_FILE_TOOLS, SYSTEM_PROMPT
 from oncall_app.agent.state import ToolObservation
-from oncall_app.agent.synthesizer import format_evidence_context
+from oncall_app.agent.synthesizer import (
+    fallback_answer_from_evidence,
+    format_evidence_context,
+)
 from oncall_app.agent.tools import ReadFileTool
 from oncall_app.documents.parser import parse_document
 from oncall_app.documents.repository import DocumentRepository
@@ -42,12 +45,21 @@ class OnCallAssistant:  # pylint: disable=too-few-public-methods
         history: list[ConversationTurn] | None = None,
     ) -> AgentResponse:
         """Answer a user message with tool-calling."""
-        candidates = retrieval_candidates
         tool_calls: list = []
-        messages = self._initial_messages(message, candidates, history or [])
+        latest_evidence: list[EvidenceItem] = []
+        messages = self._initial_messages(message, retrieval_candidates, history or [])
 
         for _ in range(self.max_tool_rounds):
-            response = self.chat_client.create_chat_completion(messages, READ_FILE_TOOLS)
+            try:
+                response = self.chat_client.create_chat_completion(messages, READ_FILE_TOOLS)
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                if not tool_calls and not latest_evidence:
+                    raise
+                return AgentResponse(
+                    answer=_fallback_answer(latest_evidence, exc),
+                    tool_calls=tool_calls,
+                    retrieval_candidates=retrieval_candidates,
+                )
             assistant_message = _assistant_message(response)
             messages.append(assistant_message)
             requested_tools = _tool_calls(assistant_message)
@@ -55,7 +67,7 @@ class OnCallAssistant:  # pylint: disable=too-few-public-methods
                 return AgentResponse(
                     answer=str(assistant_message.get("content") or ""),
                     tool_calls=tool_calls,
-                    retrieval_candidates=candidates,
+                    retrieval_candidates=retrieval_candidates,
                 )
             round_observations: list[ToolObservation] = []
             for tool_call in requested_tools:
@@ -65,12 +77,13 @@ class OnCallAssistant:  # pylint: disable=too-few-public-methods
                 messages.append(_tool_message(tool_call, observation.content))
             evidence = self._extract_evidence(message, round_observations)
             if evidence:
+                latest_evidence = evidence
                 messages.append({"role": "system", "content": format_evidence_context(evidence)})
 
         return AgentResponse(
             answer="工具调用轮次已达到上限，请缩小问题范围后重试。",
             tool_calls=tool_calls,
-            retrieval_candidates=candidates,
+            retrieval_candidates=retrieval_candidates,
         )
 
     def stream_chat(
@@ -81,34 +94,38 @@ class OnCallAssistant:  # pylint: disable=too-few-public-methods
     ) -> Iterator[AgentStreamEvent]:
         """Yield observable Agent events while answering a user message."""
         tool_calls: list = []
+        latest_evidence: list[EvidenceItem] = []
         messages = self._initial_messages(message, retrieval_candidates, history or [])
 
         for _ in range(self.max_tool_rounds):
-            response = self.chat_client.create_chat_completion(messages, READ_FILE_TOOLS)
+            try:
+                response = self.chat_client.create_chat_completion(messages, READ_FILE_TOOLS)
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                if not tool_calls and not latest_evidence:
+                    raise
+                yield from _fallback_stream_events(
+                    latest_evidence,
+                    exc,
+                    tool_calls,
+                    retrieval_candidates,
+                )
+                return
             assistant_message = _assistant_message(response)
             messages.append(assistant_message)
             requested_tools = _tool_calls(assistant_message)
             if not requested_tools:
-                answer = str(assistant_message.get("content") or "")
-                yield from _answer_delta_events(answer)
-                yield AgentStreamEvent(
-                    type="done",
-                    payload={
-                        "response": AgentResponse(
-                            answer=answer,
-                            tool_calls=tool_calls,
-                            retrieval_candidates=retrieval_candidates,
-                        )
-                    },
+                yield from _done_stream_events(
+                    str(assistant_message.get("content") or ""),
+                    tool_calls,
+                    retrieval_candidates,
                 )
                 return
 
             round_observations: list[ToolObservation] = []
             for tool_call in requested_tools:
-                fname = _tool_file_name(tool_call)
                 yield AgentStreamEvent(
                     type="tool_call",
-                    payload={"tool": "readFile", "fname": fname},
+                    payload={"tool": "readFile", "fname": _tool_file_name(tool_call)},
                 )
                 observation = self._execute_tool_call(tool_call)
                 round_observations.append(observation)
@@ -125,20 +142,14 @@ class OnCallAssistant:  # pylint: disable=too-few-public-methods
 
             evidence = self._extract_evidence(message, round_observations)
             if evidence:
+                latest_evidence = evidence
                 messages.append({"role": "system", "content": format_evidence_context(evidence)})
                 yield AgentStreamEvent(type="evidence", payload={"evidence": evidence})
 
-        answer = "工具调用轮次已达到上限，请缩小问题范围后重试。"
-        yield from _answer_delta_events(answer)
-        yield AgentStreamEvent(
-            type="done",
-            payload={
-                "response": AgentResponse(
-                    answer=answer,
-                    tool_calls=tool_calls,
-                    retrieval_candidates=retrieval_candidates,
-                )
-            },
+        yield from _done_stream_events(
+            "工具调用轮次已达到上限，请缩小问题范围后重试。",
+            tool_calls,
+            retrieval_candidates,
         )
 
     @staticmethod
@@ -252,6 +263,20 @@ def _candidate_context(candidates: list[SearchResult]) -> str:
     return "\n".join(lines)
 
 
+def _fallback_answer(evidence: list[EvidenceItem], exc: Exception) -> str:
+    """Return a user-visible fallback answer when final model synthesis fails."""
+    answer = fallback_answer_from_evidence(evidence)
+    return f"{answer}\n\n（{_fallback_warning(exc)}）"
+
+
+def _fallback_warning(exc: Exception) -> str:
+    """Return a safe, non-secret warning for model synthesis failure."""
+    reason = str(exc).lower()
+    if "timeout" in reason or "timed out" in reason:
+        return "对话模型响应超时，已基于已读取的 SOP 证据生成兜底回答。"
+    return "对话模型暂时不可用，已基于已读取的 SOP 证据生成兜底回答。"
+
+
 def _history_messages(history: list[ConversationTurn]) -> list[JsonObject]:
     """Convert recent visible turns into Chat Completions messages."""
     messages = []
@@ -267,6 +292,37 @@ def _answer_delta_events(answer: str) -> Iterator[AgentStreamEvent]:
     """Emit answer chunks as SSE-friendly deltas."""
     for chunk in _text_chunks(answer):
         yield AgentStreamEvent(type="answer_delta", payload={"delta": chunk})
+
+
+def _fallback_stream_events(
+    evidence: list[EvidenceItem],
+    exc: Exception,
+    tool_calls: list,
+    retrieval_candidates: list[SearchResult],
+) -> Iterator[AgentStreamEvent]:
+    """Emit a complete stream from already-read evidence when synthesis fails."""
+    answer = _fallback_answer(evidence, exc)
+    yield AgentStreamEvent(type="warning", payload={"message": _fallback_warning(exc)})
+    yield from _done_stream_events(answer, tool_calls, retrieval_candidates)
+
+
+def _done_stream_events(
+    answer: str,
+    tool_calls: list,
+    retrieval_candidates: list[SearchResult],
+) -> Iterator[AgentStreamEvent]:
+    """Emit answer deltas plus the final done event."""
+    yield from _answer_delta_events(answer)
+    yield AgentStreamEvent(
+        type="done",
+        payload={
+            "response": AgentResponse(
+                answer=answer,
+                tool_calls=tool_calls,
+                retrieval_candidates=retrieval_candidates,
+            )
+        },
+    )
 
 
 def _text_chunks(text: str) -> list[str]:
