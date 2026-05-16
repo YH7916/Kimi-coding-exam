@@ -71,6 +71,20 @@ def keyword_coverage(expected: list[list[str]], answers: list[str]) -> float:
     return found / total
 
 
+def memory_recall_at_1(expected: list[str], actual: list[str]) -> float:
+    """Return fraction of expected memory strings found in top-1 recall text."""
+    if len(expected) != len(actual):
+        raise ValueError("expected and actual must have the same length")
+    if not expected:
+        return 0.0
+
+    hits = 0
+    for expected_text, actual_text in zip(expected, actual, strict=True):
+        if expected_text.casefold() in actual_text.casefold():
+            hits += 1
+    return hits / len(expected)
+
+
 def _validate_batches(expected: list[list[str]], actual: list[list[str]]) -> None:
     """Validate pairwise metric inputs."""
     if len(expected) != len(actual):

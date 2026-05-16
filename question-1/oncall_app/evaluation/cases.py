@@ -5,6 +5,14 @@ from typing import Literal
 
 EvalPhase = Literal["v1", "v2", "v3"]
 
+MEMORY_CASES = [
+    {
+        "write": "记住：支付服务负责人是小王，升级群是 #pay-oncall。",
+        "recall": "支付服务报警应该找谁？",
+        "expected_memory": "支付服务负责人",
+    }
+]
+
 
 @dataclass(frozen=True)
 class EvalCase:

@@ -9,6 +9,7 @@
 | Phase 1 | `/v1`、`/v1/search`、`/v1/documents` | 解析 HTML 可见文本，使用 BM25/关键词检索，忽略 `script` 等不可见内容 |
 | Phase 2 | `/v2`、`/v2/search` | SOP section chunking + embedding vector store + BM25/RRF hybrid retrieval；无密钥时自动使用离线 semantic fallback |
 | Phase 3 | `/v3`、`/v3/chat` | OpenAI-compatible Chat Completions tool-calling Agent，只通过 `readFile(fname)` 读取 SOP，并在前端展示工具调用、证据和引用 |
+| Phase 4 | `/v3/memory`、`/v3/memory/search` | L0-L3 layered memory，支持原始事件、原子记忆、召回、删除和离线 memory recall 评测 |
 
 前端是纯静态页面，由 FastAPI 托管，三个阶段共享同一个产品化界面，可以在顶部切换 `v1 Search`、`v2 RAG` 和 `v3 Agent`。
 
@@ -25,6 +26,7 @@ question-1/
 │   ├── documents/            # HTML 解析、SOP repository、section 抽取
 │   ├── evaluation/           # README 验收用 evaluation cases 和 metrics
 │   ├── llm/                  # OpenAI-compatible embedding/chat clients
+│   ├── memory/               # L0 raw events、L1/L2/L3 memories、SQLite store、recall
 │   └── retrieval/            # BM25、chunking、vector store、hybrid retrieval
 ├── scripts/evaluate.py       # 离线验收脚本
 ├── tests/                    # 单元测试、API 测试、检索测试、集成 smoke test
@@ -70,8 +72,8 @@ npm run lint:frontend
 
 本地最近一次验证结果：
 
-- `python scripts/evaluate.py`：v1 hit@5 = 1.00，v2 hit@3 = 1.00，v3 tool files = 1.00，v3 keywords = 1.00。
-- `python -m unittest`：83 个测试通过，2 个真实 provider 测试默认跳过。
+- `python scripts/evaluate.py`：v1 hit@5 = 1.00，v2 hit@3 = 1.00，v3 tool files = 1.00，v3 keywords = 1.00，memory recall@1 = 1.00。
+- `python -m unittest`：96 个测试通过，2 个真实 provider 测试默认跳过。
 - `npm run lint:frontend`：通过。
 
 ## API 说明
@@ -128,6 +130,30 @@ Agent 约束：
 - `P0 故障的响应流程是什么？` 综合多个 SOP
 - `怀疑有人入侵了系统` 读取 `sop-005.html`
 - `推荐结果质量下降了` 读取 `sop-008.html`
+
+### Phase 4
+
+```text
+POST /v3/chat
+{ "message": "记住：支付服务负责人是小王，升级群是 #pay-oncall。" }
+→ 200 { "memory_hits": [], ... }
+
+POST /v3/chat
+{ "message": "支付服务报警应该找谁？" }
+→ 200 { "memory_hits": [{ "summary": "支付服务负责人是小王..." }], ... }
+
+GET /v3/memory
+GET /v3/memory/search?q=支付服务
+DELETE /v3/memory/{memory_id}
+```
+
+记忆边界：
+
+- L0 raw events：每轮完成的用户消息、答案、tool calls、evidence 和 trace，用于 provenance。
+- L1 atomic memories：显式“记住”类事实、偏好、服务上下文；第一版只做保守确定性抽取。
+- L2 scene memories：预留给事故场景摘要，后续可由 L0/L1 聚合。
+- L3 profile：预留给稳定用户/团队画像，召回时和 L1/L2 一起格式化为非 SOP 上下文。
+- Memory context 不是 SOP 证据；事故处理动作仍以 RAG 候选和 `readFile` 读取到的 SOP 为准。
 
 ## 真实模型配置
 
