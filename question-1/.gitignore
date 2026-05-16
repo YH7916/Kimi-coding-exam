@@ -14,3 +14,4 @@ output/
 venv/
 node_modules/
 AGENTS.md
+.worktrees/
