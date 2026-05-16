@@ -3,6 +3,7 @@
 import json
 from collections.abc import Iterator
 from pathlib import Path
+from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Query, Response, status
 from fastapi.responses import StreamingResponse
@@ -17,11 +18,15 @@ from oncall_app.api.schemas import (
     DocumentCreated,
     DocumentDetail,
     EmbeddingCacheStatus,
+    MemoryRecordListResponse,
+    MemorySearchResponse,
     ProviderEndpointStatus,
     ProviderStatusResponse,
     SearchResponse,
     chat_response,
     document_detail,
+    memory_record_list,
+    memory_search_response,
     search_response,
 )
 from oncall_app.api.static_files import read_frontend_shell
@@ -48,7 +53,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = PROJECT_ROOT / "data"
 EMBEDDING_CACHE_PATH = PROJECT_ROOT / ".cache" / "embeddings.sqlite3"
 MEMORY_STORE_PATH = PROJECT_ROOT / ".cache" / "memory.sqlite3"
-TEST_MEMORY_STORE_PATH = PROJECT_ROOT / ".cache" / "test-memory.sqlite3"
 AGENT_CANDIDATE_LIMIT = 5
 RETRIEVAL_HISTORY_TURNS = 4
 MAX_RETRIEVAL_QUERY_CHARS = 800
@@ -246,11 +250,14 @@ class SearchRuntime:
 
     def _build_memory_components(self, reset_store: bool = False) -> None:
         """Build memory store and recall helpers."""
-        path = TEST_MEMORY_STORE_PATH if self.test_mode else self.memory_store_path
+        del reset_store
+        path = (
+            PROJECT_ROOT / ".cache" / f"test-memory-{uuid4().hex}.sqlite3"
+            if self.test_mode
+            else self.memory_store_path
+        )
         if path is None:
             path = MEMORY_STORE_PATH
-        if reset_store and path.exists():
-            path.unlink()
         self.memory_store = MemoryStore(path)
         self.memory_retriever = MemoryRetriever(self.memory_store)
         self.memory_extractor = DeterministicMemoryExtractor()
@@ -351,6 +358,34 @@ def v3_chat_stream(payload: ChatRequest) -> StreamingResponse:
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@router.get("/v3/memory")
+def v3_memory(layer: str | None = Query(default=None)) -> MemoryRecordListResponse:
+    """List stored memories for inspection."""
+    return memory_record_list(runtime.memory_store.list_memories(layer=layer))
+
+
+@router.get("/v3/memory/search")
+def v3_memory_search(
+    q: str = Query(default=""),
+    limit: int = Query(default=5, ge=1, le=20),
+) -> MemorySearchResponse:
+    """Search stored L1/L2 memories."""
+    return memory_search_response(runtime.memory_retriever.search(q, limit=limit))
+
+
+@router.delete("/v3/memory/{memory_id}", status_code=status.HTTP_204_NO_CONTENT)
+def v3_memory_delete(memory_id: str) -> Response:
+    """Soft-delete one memory."""
+    try:
+        runtime.memory_store.delete_memory(memory_id)
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Memory not found",
+        ) from exc
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 def _normalize_query(q: str) -> str:

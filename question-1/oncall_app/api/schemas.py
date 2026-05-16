@@ -5,7 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from oncall_app.agent.evidence import EvidenceItem
-from oncall_app.memory.models import MemorySearchHit
+from oncall_app.memory.models import MemoryRecord, MemorySearchHit
 from oncall_app.models import AgentResponse, Document, SearchResult, ToolCall
 
 MAX_EVIDENCE_HEADING_CHARS = 80
@@ -137,6 +137,33 @@ class MemoryHitItem(BaseModel):
     reason: str
 
 
+class MemoryRecordItem(BaseModel):
+    """One stored memory record exposed by management APIs."""
+
+    id: str
+    layer: str
+    kind: str
+    summary: str
+    content: str
+    tags: list[str]
+    confidence: float
+    importance: float
+    created_at: str
+    updated_at: str
+
+
+class MemoryRecordListResponse(BaseModel):
+    """Stored memory records."""
+
+    items: list[MemoryRecordItem]
+
+
+class MemorySearchResponse(BaseModel):
+    """Memory search response."""
+
+    items: list[MemoryHitItem]
+
+
 class ChatResponse(BaseModel):
     """v3 chat response shape."""
 
@@ -180,6 +207,16 @@ def document_detail(document: Document) -> DocumentDetail:
             for section in document.sections
         ],
     )
+
+
+def memory_record_list(records: list[MemoryRecord]) -> MemoryRecordListResponse:
+    """Convert memory records into API schema."""
+    return MemoryRecordListResponse(items=[_memory_record_item(record) for record in records])
+
+
+def memory_search_response(hits: list[MemorySearchHit]) -> MemorySearchResponse:
+    """Convert memory hits into API schema."""
+    return MemorySearchResponse(items=[_memory_hit_item(hit) for hit in hits])
 
 
 def chat_response(response: AgentResponse, evidence: list[EvidenceItem]) -> ChatResponse:
@@ -242,6 +279,22 @@ def _memory_hit_item(hit: MemorySearchHit) -> MemoryHitItem:
         summary=_memory_summary(hit),
         score=hit.score,
         reason=hit.reason,
+    )
+
+
+def _memory_record_item(record: MemoryRecord) -> MemoryRecordItem:
+    """Convert a stored memory into API schema."""
+    return MemoryRecordItem(
+        id=record.id,
+        layer=record.layer,
+        kind=record.kind,
+        summary=_compact_text(record.summary or record.content, MAX_EVIDENCE_TEXT_CHARS),
+        content=record.content,
+        tags=record.tags,
+        confidence=record.confidence,
+        importance=record.importance,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
     )
 
 
