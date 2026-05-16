@@ -3,17 +3,23 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from oncall_app.agent.assistant import OnCallAssistant
 from oncall_app.agent.local_chat import LocalChatClient
 from oncall_app.documents.repository import DocumentRepository
-from oncall_app.evaluation.cases import EvalCase, load_default_cases
+from oncall_app.evaluation.cases import MEMORY_CASES, EvalCase, load_default_cases
 from oncall_app.evaluation.metrics import (
     hit_rate_at_k,
     keyword_coverage,
+    memory_recall_at_1,
     mrr,
     tool_file_accuracy,
 )
+from oncall_app.memory.extractor import DeterministicMemoryExtractor
+from oncall_app.memory.models import RawMemoryEvent
+from oncall_app.memory.retrieval import MemoryRetriever
+from oncall_app.memory.store import MemoryStore
 from oncall_app.models import SearchResult
 from oncall_app.retrieval.service import RetrievalService
 
@@ -32,6 +38,7 @@ class EvaluationReport:
     v2_mrr: float
     v3_tool_file_accuracy: float
     v3_keyword_coverage: float
+    memory_recall_at_1: float
 
 
 def run_evaluation(cases: list[EvalCase] | None = None) -> EvaluationReport:
@@ -56,15 +63,17 @@ def run_evaluation(cases: list[EvalCase] | None = None) -> EvaluationReport:
         assistant,
         service,
     )
+    memory_recall = _memory_metrics(MEMORY_CASES)
 
     return EvaluationReport(
-        case_count=len(eval_cases),
+        case_count=len(eval_cases) + len(MEMORY_CASES),
         v1_hit_rate_at_5=v1_hit,
         v1_mrr=v1_rank,
         v2_hit_rate_at_3=v2_hit,
         v2_mrr=v2_rank,
         v3_tool_file_accuracy=v3_tool_files,
         v3_keyword_coverage=v3_keywords,
+        memory_recall_at_1=memory_recall,
     )
 
 
@@ -78,6 +87,7 @@ def format_report(report: EvaluationReport) -> str:
         ("v2 mrr", _pct(report.v2_mrr)),
         ("v3 tool files", _pct(report.v3_tool_file_accuracy)),
         ("v3 keywords", _pct(report.v3_keyword_coverage)),
+        ("memory recall@1", _pct(report.memory_recall_at_1)),
     ]
     width = max(len(name) for name, _ in rows)
     lines = ["Metric".ljust(width) + "  Score", "-" * (width + 7)]
@@ -137,6 +147,30 @@ def _agent_batches(
         )
         answers.append(response.answer)
     return expected_files, actual_files, expected_keywords, answers
+
+
+def _memory_metrics(cases: list[dict[str, str]]) -> float:
+    """Run memory write-then-recall cases."""
+    expected = []
+    actual = []
+    with TemporaryDirectory() as temp_dir:
+        store = MemoryStore(Path(temp_dir) / "memory.sqlite3")
+        extractor = DeterministicMemoryExtractor()
+        retriever = MemoryRetriever(store)
+        for index, case in enumerate(cases):
+            event = RawMemoryEvent(
+                id=f"mem-eval-{index}",
+                session_id="eval",
+                user_message=case["write"],
+                assistant_answer="已记录。",
+            )
+            store.add_event(event)
+            for memory in extractor.extract(event):
+                store.upsert_memory(memory)
+            hits = retriever.search(case["recall"], limit=1)
+            expected.append(case["expected_memory"])
+            actual.append(hits[0].record.summary if hits else "")
+    return memory_recall_at_1(expected, actual)
 
 
 def _cases_for_phase(cases: list[EvalCase], phase: str) -> list[EvalCase]:

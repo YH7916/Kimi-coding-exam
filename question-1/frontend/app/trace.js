@@ -1,4 +1,5 @@
 import { escapeHtml } from "./markdown.js";
+import { renderMemoryTrace } from "./memory.js";
 
 export function renderInlineTrace(turn, showTrace) {
   const trace = showTrace ? turn.trace || [] : [];
@@ -7,6 +8,7 @@ export function renderInlineTrace(turn, showTrace) {
   }
   const toolCallCount = (turn.toolCalls || []).length;
   const hasEvidence = (turn.evidence || []).length > 0;
+  const memoryTrace = renderMemoryTrace(turn.memoryHits || []);
   if (!toolCallCount && !hasEvidence && turn.streaming) {
     return "";
   }
@@ -43,6 +45,7 @@ export function renderInlineTrace(turn, showTrace) {
           </li>
         `).join("")}
       </ol>
+      ${memoryTrace}
     </section>
   `;
 }
@@ -53,6 +56,9 @@ function compactTraceType(type) {
   }
   if (type === "retrieval") {
     return "检索";
+  }
+  if (type === "memory") {
+    return "记忆";
   }
   if (type === "observation") {
     return "读取";

@@ -85,6 +85,9 @@ class FrontendStaticTest(unittest.TestCase):
         self.assertIn("data-sop-id", js)
         self.assertIn("data-sop-section", js)
         self.assertIn("evidence-section", js)
+        self.assertIn("memory_hits", js)
+        self.assertIn("renderMemoryTrace", js)
+        self.assertIn("/v3/memory/search", js)
 
     def test_v3_evidence_cards_use_scroll_carousel(self):
         """V3 evidence cards render as a compact horizontal carousel."""

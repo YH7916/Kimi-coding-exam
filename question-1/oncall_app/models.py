@@ -3,6 +3,8 @@
 from dataclasses import dataclass, field
 from typing import Literal
 
+from oncall_app.memory.models import MemorySearchHit
+
 
 @dataclass(frozen=True)
 class Section:
@@ -60,6 +62,7 @@ class AgentResponse:
     answer: str
     tool_calls: list[ToolCall]
     retrieval_candidates: list[SearchResult] = field(default_factory=list)
+    memory_hits: list[MemorySearchHit] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

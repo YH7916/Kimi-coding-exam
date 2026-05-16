@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from oncall_app.agent.evidence import EvidenceItem
+from oncall_app.memory.models import MemoryRecord, MemorySearchHit
 from oncall_app.models import AgentResponse, Document, SearchResult, ToolCall
 
 MAX_EVIDENCE_HEADING_CHARS = 80
@@ -125,6 +126,44 @@ class TraceResponseItem(BaseModel):
     message: str
 
 
+class MemoryHitItem(BaseModel):
+    """One recalled memory used by v3 chat."""
+
+    id: str
+    layer: str
+    kind: str
+    summary: str
+    score: float
+    reason: str
+
+
+class MemoryRecordItem(BaseModel):
+    """One stored memory record exposed by management APIs."""
+
+    id: str
+    layer: str
+    kind: str
+    summary: str
+    content: str
+    tags: list[str]
+    confidence: float
+    importance: float
+    created_at: str
+    updated_at: str
+
+
+class MemoryRecordListResponse(BaseModel):
+    """Stored memory records."""
+
+    items: list[MemoryRecordItem]
+
+
+class MemorySearchResponse(BaseModel):
+    """Memory search response."""
+
+    items: list[MemoryHitItem]
+
+
 class ChatResponse(BaseModel):
     """v3 chat response shape."""
 
@@ -132,6 +171,7 @@ class ChatResponse(BaseModel):
     tool_calls: list[ToolCallItem]
     evidence: list[EvidenceResponseItem]
     trace: list[TraceResponseItem]
+    memory_hits: list[MemoryHitItem]
 
 
 def search_response(query: str, results: list[SearchResult]) -> SearchResponse:
@@ -169,6 +209,16 @@ def document_detail(document: Document) -> DocumentDetail:
     )
 
 
+def memory_record_list(records: list[MemoryRecord]) -> MemoryRecordListResponse:
+    """Convert memory records into API schema."""
+    return MemoryRecordListResponse(items=[_memory_record_item(record) for record in records])
+
+
+def memory_search_response(hits: list[MemorySearchHit]) -> MemorySearchResponse:
+    """Convert memory hits into API schema."""
+    return MemorySearchResponse(items=[_memory_hit_item(hit) for hit in hits])
+
+
 def chat_response(response: AgentResponse, evidence: list[EvidenceItem]) -> ChatResponse:
     """Convert an agent response into API schema."""
     retrieval_trace = []
@@ -178,6 +228,15 @@ def chat_response(response: AgentResponse, evidence: list[EvidenceItem]) -> Chat
             TraceResponseItem(
                 type="retrieval",
                 message=f"v2 hybrid retrieval candidates: {files}",
+            )
+        )
+    memory_trace = []
+    if response.memory_hits:
+        summaries = ", ".join(_memory_summary(hit) for hit in response.memory_hits[:3])
+        memory_trace.append(
+            TraceResponseItem(
+                type="memory",
+                message=f"recalled {len(response.memory_hits)} memories: {summaries}",
             )
         )
     return ChatResponse(
@@ -192,11 +251,13 @@ def chat_response(response: AgentResponse, evidence: list[EvidenceItem]) -> Chat
             for item in evidence
         ],
         trace=retrieval_trace
+        + memory_trace
         + [
             TraceResponseItem(type="tool_call", message=f'readFile("{call.fname}")')
             for call in response.tool_calls
         ]
         + [TraceResponseItem(type="answer", message="final answer returned")],
+        memory_hits=[_memory_hit_item(hit) for hit in response.memory_hits],
     )
 
 
@@ -207,6 +268,39 @@ def _tool_call_item(call: ToolCall) -> ToolCallItem:
         fname=call.fname,
         result_preview=call.result_preview,
     )
+
+
+def _memory_hit_item(hit: MemorySearchHit) -> MemoryHitItem:
+    """Convert a recalled memory into API schema."""
+    return MemoryHitItem(
+        id=hit.record.id,
+        layer=hit.record.layer,
+        kind=hit.record.kind,
+        summary=_memory_summary(hit),
+        score=hit.score,
+        reason=hit.reason,
+    )
+
+
+def _memory_record_item(record: MemoryRecord) -> MemoryRecordItem:
+    """Convert a stored memory into API schema."""
+    return MemoryRecordItem(
+        id=record.id,
+        layer=record.layer,
+        kind=record.kind,
+        summary=_compact_text(record.summary or record.content, MAX_EVIDENCE_TEXT_CHARS),
+        content=record.content,
+        tags=record.tags,
+        confidence=record.confidence,
+        importance=record.importance,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+    )
+
+
+def _memory_summary(hit: MemorySearchHit) -> str:
+    """Return a compact memory summary."""
+    return _compact_text(hit.record.summary or hit.record.content, MAX_EVIDENCE_TEXT_CHARS)
 
 
 def _compact_text(value: str, limit: int) -> str:

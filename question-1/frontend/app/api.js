@@ -28,6 +28,14 @@ export async function streamChat(endpoint, message, history, onEvent) {
   await readSseStream(response, onEvent);
 }
 
+export async function searchMemories(query) {
+  const response = await fetch(`/v3/memory/search?q=${encodeURIComponent(query)}`);
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`);
+  }
+  return response.json();
+}
+
 export async function fetchDocumentDetail(docId) {
   const response = await fetch(`/documents/${encodeURIComponent(docId)}`);
   if (!response.ok) {

@@ -17,6 +17,7 @@ from oncall_app.documents.parser import parse_document
 from oncall_app.documents.repository import DocumentRepository
 from oncall_app.llm.chat_client import ChatClient
 from oncall_app.llm.openai_compat import JsonObject
+from oncall_app.memory.models import MemorySearchHit
 from oncall_app.models import AgentResponse, AgentStreamEvent, ConversationTurn, SearchResult
 
 MAX_TOOL_ROUNDS = 4
@@ -43,11 +44,19 @@ class OnCallAssistant:  # pylint: disable=too-few-public-methods
         message: str,
         retrieval_candidates: list[SearchResult],
         history: list[ConversationTurn] | None = None,
+        memory_context: str = "",
+        memory_hits: list[MemorySearchHit] | None = None,
     ) -> AgentResponse:
         """Answer a user message with tool-calling."""
         tool_calls: list = []
         latest_evidence: list[EvidenceItem] = []
-        messages = self._initial_messages(message, retrieval_candidates, history or [])
+        recalled_memory = memory_hits or []
+        messages = self._initial_messages(
+            message,
+            retrieval_candidates,
+            history or [],
+            memory_context=memory_context,
+        )
 
         for _ in range(self.max_tool_rounds):
             try:
@@ -59,6 +68,7 @@ class OnCallAssistant:  # pylint: disable=too-few-public-methods
                     answer=_fallback_answer(latest_evidence, exc),
                     tool_calls=tool_calls,
                     retrieval_candidates=retrieval_candidates,
+                    memory_hits=recalled_memory,
                 )
             assistant_message = _assistant_message(response)
             messages.append(assistant_message)
@@ -68,6 +78,7 @@ class OnCallAssistant:  # pylint: disable=too-few-public-methods
                     answer=str(assistant_message.get("content") or ""),
                     tool_calls=tool_calls,
                     retrieval_candidates=retrieval_candidates,
+                    memory_hits=recalled_memory,
                 )
             round_observations: list[ToolObservation] = []
             for tool_call in requested_tools:
@@ -84,6 +95,7 @@ class OnCallAssistant:  # pylint: disable=too-few-public-methods
             answer="工具调用轮次已达到上限，请缩小问题范围后重试。",
             tool_calls=tool_calls,
             retrieval_candidates=retrieval_candidates,
+            memory_hits=recalled_memory,
         )
 
     def stream_chat(
@@ -91,11 +103,19 @@ class OnCallAssistant:  # pylint: disable=too-few-public-methods
         message: str,
         retrieval_candidates: list[SearchResult],
         history: list[ConversationTurn] | None = None,
+        memory_context: str = "",
+        memory_hits: list[MemorySearchHit] | None = None,
     ) -> Iterator[AgentStreamEvent]:
         """Yield observable Agent events while answering a user message."""
         tool_calls: list = []
         latest_evidence: list[EvidenceItem] = []
-        messages = self._initial_messages(message, retrieval_candidates, history or [])
+        recalled_memory = memory_hits or []
+        messages = self._initial_messages(
+            message,
+            retrieval_candidates,
+            history or [],
+            memory_context=memory_context,
+        )
 
         for _ in range(self.max_tool_rounds):
             if tool_calls or latest_evidence:
@@ -104,6 +124,7 @@ class OnCallAssistant:  # pylint: disable=too-few-public-methods
                         self.chat_client.stream_chat_completion(messages, []),
                         tool_calls,
                         retrieval_candidates,
+                        recalled_memory,
                     )
                 except Exception as exc:  # pylint: disable=broad-exception-caught
                     yield from _fallback_stream_events(
@@ -111,6 +132,7 @@ class OnCallAssistant:  # pylint: disable=too-few-public-methods
                         exc,
                         tool_calls,
                         retrieval_candidates,
+                        recalled_memory,
                     )
                 return
             try:
@@ -123,6 +145,7 @@ class OnCallAssistant:  # pylint: disable=too-few-public-methods
                     exc,
                     tool_calls,
                     retrieval_candidates,
+                    recalled_memory,
                 )
                 return
             assistant_message = _assistant_message(response)
@@ -133,6 +156,7 @@ class OnCallAssistant:  # pylint: disable=too-few-public-methods
                     str(assistant_message.get("content") or ""),
                     tool_calls,
                     retrieval_candidates,
+                    recalled_memory,
                 )
                 return
 
@@ -165,6 +189,7 @@ class OnCallAssistant:  # pylint: disable=too-few-public-methods
             "工具调用轮次已达到上限，请缩小问题范围后重试。",
             tool_calls,
             retrieval_candidates,
+            recalled_memory,
         )
 
     @staticmethod
@@ -172,12 +197,15 @@ class OnCallAssistant:  # pylint: disable=too-few-public-methods
         message: str,
         retrieval_candidates: list[SearchResult],
         history: list[ConversationTurn],
+        memory_context: str = "",
     ) -> list[JsonObject]:
         """Build initial Chat Completions messages."""
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "system", "content": _candidate_context(retrieval_candidates)},
         ]
+        if memory_context:
+            messages.append({"role": "system", "content": memory_context})
         messages.extend(_history_messages(history))
         messages.append({"role": "user", "content": message})
         return messages
@@ -314,17 +342,19 @@ def _fallback_stream_events(
     exc: Exception,
     tool_calls: list,
     retrieval_candidates: list[SearchResult],
+    memory_hits: list[MemorySearchHit],
 ) -> Iterator[AgentStreamEvent]:
     """Emit a complete stream from already-read evidence when synthesis fails."""
     answer = _fallback_answer(evidence, exc)
     yield AgentStreamEvent(type="warning", payload={"message": _fallback_warning(exc)})
-    yield from _done_stream_events(answer, tool_calls, retrieval_candidates)
+    yield from _done_stream_events(answer, tool_calls, retrieval_candidates, memory_hits)
 
 
 def _done_stream_events(
     answer: str,
     tool_calls: list,
     retrieval_candidates: list[SearchResult],
+    memory_hits: list[MemorySearchHit],
 ) -> Iterator[AgentStreamEvent]:
     """Emit answer deltas plus the final done event."""
     yield from _answer_delta_events(answer)
@@ -335,6 +365,7 @@ def _done_stream_events(
                 answer=answer,
                 tool_calls=tool_calls,
                 retrieval_candidates=retrieval_candidates,
+                memory_hits=memory_hits,
             )
         },
     )
@@ -344,6 +375,7 @@ def _provider_stream_events(
     deltas: Iterator[str],
     tool_calls: list,
     retrieval_candidates: list[SearchResult],
+    memory_hits: list[MemorySearchHit],
 ) -> Iterator[AgentStreamEvent]:
     """Forward provider deltas as SSE answer events."""
     answer_parts = []
@@ -357,6 +389,7 @@ def _provider_stream_events(
                 answer="".join(answer_parts),
                 tool_calls=tool_calls,
                 retrieval_candidates=retrieval_candidates,
+                memory_hits=memory_hits,
             )
         },
     )
