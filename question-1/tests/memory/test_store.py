@@ -2,6 +2,7 @@
 
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from oncall_app.memory.models import MemoryRecord, RawMemoryEvent
@@ -62,6 +63,51 @@ class MemoryStoreTest(unittest.TestCase):
 
             self.assertEqual(store.list_memories(), [])
             self.assertIsNotNone(store.get_memory(stored.id, include_inactive=True).deleted_at)
+
+    def test_upsert_supersedes_conflicting_memory_by_dedupe_key(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = MemoryStore(Path(temp_dir) / "memory.sqlite3")
+            first = store.upsert_memory(
+                MemoryRecord(
+                    layer="L1",
+                    kind="service_owner",
+                    content="支付服务负责人是小王。",
+                    summary="支付服务负责人：小王",
+                    metadata={"dedupe_key": "service_owner:支付服务"},
+                )
+            )
+
+            second = store.upsert_memory(
+                MemoryRecord(
+                    layer="L1",
+                    kind="service_owner",
+                    content="支付服务负责人是小周。",
+                    summary="支付服务负责人：小周",
+                    metadata={"dedupe_key": "service_owner:支付服务"},
+                )
+            )
+
+            active = store.list_memories(layer="L1")
+            self.assertEqual(len(active), 1)
+            self.assertEqual(active[0].summary, "支付服务负责人：小周")
+            self.assertEqual(second.source_memory_ids, [first.id])
+            self.assertIsNotNone(store.get_memory(first.id, include_inactive=True).deleted_at)
+
+    def test_expired_memories_are_hidden_from_active_reads(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = MemoryStore(Path(temp_dir) / "memory.sqlite3")
+            record = store.upsert_memory(
+                MemoryRecord(
+                    layer="L1",
+                    kind="preference",
+                    content="临时偏好：今天用英文回答。",
+                )
+            )
+
+            store.upsert_memory(replace(record, expires_at="2000-01-01T00:00:00+00:00"))
+
+            self.assertEqual(store.list_memories(layer="L1"), [])
+            self.assertIsNotNone(store.get_memory(record.id, include_inactive=True))
 
 
 if __name__ == "__main__":

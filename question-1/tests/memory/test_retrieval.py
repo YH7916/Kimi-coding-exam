@@ -52,6 +52,25 @@ class MemoryRetrievalTest(unittest.TestCase):
 
             self.assertEqual(profile[0].record.layer, "L3")
 
+    def test_search_recalls_l2_incident_scene(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = MemoryStore(Path(temp_dir) / "memory.sqlite3")
+            store.upsert_memory(
+                MemoryRecord(
+                    layer="L2",
+                    kind="incident_scene",
+                    content="用户问题：服务 OOM 了怎么办？\n处理摘要：保存堆转储并升级。",
+                    summary="事故场景：服务 OOM；证据：sop-001.html",
+                    tags=["事故场景", "OOM", "sop-001.html"],
+                    importance=0.8,
+                )
+            )
+
+            hits = MemoryRetriever(store).search("上次 OOM 怎么处理的？", limit=1)
+
+            self.assertEqual(hits[0].record.layer, "L2")
+            self.assertIn("OOM", hits[0].record.summary)
+
 
 if __name__ == "__main__":
     unittest.main()
