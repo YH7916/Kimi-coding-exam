@@ -29,6 +29,11 @@ from oncall_app.documents.repository import DocumentRepository
 from oncall_app.llm.chat_client import ChatClient, create_chat_client
 from oncall_app.llm.config import chat_config_from_env, embedding_config_from_env
 from oncall_app.llm.embedding_client import EmbeddingClient, create_embedding_client
+from oncall_app.memory.context import format_memory_context
+from oncall_app.memory.extractor import DeterministicMemoryExtractor
+from oncall_app.memory.models import MemorySearchHit, RawMemoryEvent
+from oncall_app.memory.retrieval import MemoryRetriever
+from oncall_app.memory.store import MemoryStore
 from oncall_app.models import (
     AgentResponse,
     AgentStreamEvent,
@@ -42,6 +47,8 @@ from oncall_app.retrieval.service import RetrievalService
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = PROJECT_ROOT / "data"
 EMBEDDING_CACHE_PATH = PROJECT_ROOT / ".cache" / "embeddings.sqlite3"
+MEMORY_STORE_PATH = PROJECT_ROOT / ".cache" / "memory.sqlite3"
+TEST_MEMORY_STORE_PATH = PROJECT_ROOT / ".cache" / "test-memory.sqlite3"
 AGENT_CANDIDATE_LIMIT = 5
 RETRIEVAL_HISTORY_TURNS = 4
 MAX_RETRIEVAL_QUERY_CHARS = 800
@@ -58,12 +65,15 @@ class SearchRuntime:
         test_mode: bool = False,
         embedding_client: EmbeddingClient | None = None,
         embedding_cache_path: Path | None = EMBEDDING_CACHE_PATH,
+        memory_store_path: Path | None = MEMORY_STORE_PATH,
     ):
         self.data_dir = data_dir
         self.test_mode = test_mode
         self._embedding_client_override = embedding_client
         self.embedding_cache_path = embedding_cache_path
+        self.memory_store_path = memory_store_path
         self.repository = DocumentRepository(data_dir)
+        self._build_memory_components(reset_store=test_mode)
         self.service = self._build_retrieval_service()
         self.assistant = self._build_assistant()
 
@@ -71,6 +81,7 @@ class SearchRuntime:
         """Reset repository and retrieval state from disk."""
         self.test_mode = test_mode
         self.repository = DocumentRepository(self.data_dir)
+        self._build_memory_components(reset_store=test_mode)
         self.rebuild_index()
 
     def rebuild_index(self) -> None:
@@ -83,10 +94,13 @@ class SearchRuntime:
         turns = history or []
         retrieval_query = _conversation_query(message, turns)
         candidates = self.service.semantic_search(retrieval_query, limit=AGENT_CANDIDATE_LIMIT)
+        memory_hits = self._memory_hits(retrieval_query)
         return self.assistant.chat(
             message,
             retrieval_candidates=candidates,
             history=turns,
+            memory_context=format_memory_context(memory_hits),
+            memory_hits=memory_hits,
         )
 
     def chat_events(
@@ -98,6 +112,7 @@ class SearchRuntime:
         turns = history or []
         retrieval_query = _conversation_query(message, turns)
         candidates = self.service.semantic_search(retrieval_query, limit=AGENT_CANDIDATE_LIMIT)
+        memory_hits = self._memory_hits(retrieval_query)
         yield AgentStreamEvent(
             type="retrieval",
             payload={
@@ -105,11 +120,57 @@ class SearchRuntime:
                 "candidates": candidates,
             },
         )
+        if memory_hits:
+            yield AgentStreamEvent(
+                type="memory",
+                payload={"memory_hits": memory_hits},
+            )
         yield from self.assistant.stream_chat(
             message,
             retrieval_candidates=candidates,
             history=turns,
+            memory_context=format_memory_context(memory_hits),
+            memory_hits=memory_hits,
         )
+
+    def record_interaction(
+        self,
+        message: str,
+        response: AgentResponse,
+        evidence: list[EvidenceItem],
+    ) -> None:
+        """Persist one completed chat turn and extract durable memories."""
+        event = self.memory_store.add_event(
+            RawMemoryEvent(
+                session_id="default",
+                user_message=message,
+                assistant_answer=response.answer,
+                tool_calls=[
+                    {
+                        "tool": call.tool,
+                        "fname": call.fname,
+                        "result_preview": call.result_preview,
+                    }
+                    for call in response.tool_calls
+                ],
+                evidence=[
+                    {
+                        "file": item.file,
+                        "section": item.section_heading,
+                        "text": item.text,
+                    }
+                    for item in evidence
+                ],
+                trace=[
+                    {
+                        "type": "memory",
+                        "message": f"used {len(response.memory_hits)} recalled memories",
+                    }
+                ],
+            )
+        )
+        for memory in self.memory_extractor.extract(event):
+            self.memory_store.upsert_memory(memory)
 
     def provider_status(self) -> ProviderStatusResponse:
         """Return non-sensitive provider and cache status."""
@@ -183,6 +244,26 @@ class SearchRuntime:
             chat_client=_chat_client(self.test_mode),
         )
 
+    def _build_memory_components(self, reset_store: bool = False) -> None:
+        """Build memory store and recall helpers."""
+        path = TEST_MEMORY_STORE_PATH if self.test_mode else self.memory_store_path
+        if path is None:
+            path = MEMORY_STORE_PATH
+        if reset_store and path.exists():
+            path.unlink()
+        self.memory_store = MemoryStore(path)
+        self.memory_retriever = MemoryRetriever(self.memory_store)
+        self.memory_extractor = DeterministicMemoryExtractor()
+
+    def _memory_hits(self, query: str) -> list[MemorySearchHit]:
+        """Return profile plus query-specific memory hits."""
+        return _dedupe_memory_hits(
+            [
+                *self.memory_retriever.load_profile(limit=3),
+                *self.memory_retriever.search(query, limit=5),
+            ]
+        )
+
 
 @router.get("/health")
 def health() -> dict[str, str]:
@@ -253,6 +334,7 @@ def v3_chat(payload: ChatRequest) -> ChatResponse:
     retrieval_query = _conversation_query(payload.message, history)
     response = runtime.chat(payload.message, history=history)
     evidence = _evidence_for_tool_calls(retrieval_query, response.tool_calls)
+    runtime.record_interaction(payload.message, response, evidence)
     return chat_response(response, evidence)
 
 
@@ -353,6 +435,9 @@ def _stream_payload(event: AgentStreamEvent, retrieval_query: str) -> dict[str, 
     if event.type == "evidence":
         evidence = event.payload.get("evidence", [])
         return {"items": _evidence_items(evidence)}
+    if event.type == "memory":
+        memory_hits = event.payload.get("memory_hits", [])
+        return {"items": _memory_hit_items(memory_hits)}
     if event.type == "done":
         response = event.payload.get("response")
         if not isinstance(response, AgentResponse):
@@ -400,6 +485,27 @@ def _evidence_items(evidence: object) -> list[dict[str, str]]:
     return items
 
 
+def _memory_hit_items(memory_hits: object) -> list[dict[str, object]]:
+    """Return JSON-safe recalled memory summaries."""
+    if not isinstance(memory_hits, list):
+        return []
+    items = []
+    for hit in memory_hits:
+        if not isinstance(hit, MemorySearchHit):
+            continue
+        items.append(
+            {
+                "id": hit.record.id,
+                "layer": hit.record.layer,
+                "kind": hit.record.kind,
+                "summary": hit.record.summary or hit.record.content,
+                "score": hit.score,
+                "reason": hit.reason,
+            }
+        )
+    return items
+
+
 def _sse(event: str, data: dict[str, object]) -> str:
     """Return one Server-Sent Event frame."""
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
@@ -416,6 +522,18 @@ def _conversation_query(message: str, history: list[ConversationTurn]) -> str:
     if len(combined) <= MAX_RETRIEVAL_QUERY_CHARS:
         return combined
     return combined[-MAX_RETRIEVAL_QUERY_CHARS:]
+
+
+def _dedupe_memory_hits(hits: list[MemorySearchHit]) -> list[MemorySearchHit]:
+    """Keep first hit per memory id while preserving score order by source list."""
+    seen: set[str] = set()
+    deduped = []
+    for hit in hits:
+        if hit.record.id in seen:
+            continue
+        seen.add(hit.record.id)
+        deduped.append(hit)
+    return deduped
 
 
 runtime = SearchRuntime(DATA_DIR, test_mode=True)

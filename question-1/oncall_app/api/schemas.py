@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from oncall_app.agent.evidence import EvidenceItem
+from oncall_app.memory.models import MemorySearchHit
 from oncall_app.models import AgentResponse, Document, SearchResult, ToolCall
 
 MAX_EVIDENCE_HEADING_CHARS = 80
@@ -125,6 +126,17 @@ class TraceResponseItem(BaseModel):
     message: str
 
 
+class MemoryHitItem(BaseModel):
+    """One recalled memory used by v3 chat."""
+
+    id: str
+    layer: str
+    kind: str
+    summary: str
+    score: float
+    reason: str
+
+
 class ChatResponse(BaseModel):
     """v3 chat response shape."""
 
@@ -132,6 +144,7 @@ class ChatResponse(BaseModel):
     tool_calls: list[ToolCallItem]
     evidence: list[EvidenceResponseItem]
     trace: list[TraceResponseItem]
+    memory_hits: list[MemoryHitItem]
 
 
 def search_response(query: str, results: list[SearchResult]) -> SearchResponse:
@@ -180,6 +193,15 @@ def chat_response(response: AgentResponse, evidence: list[EvidenceItem]) -> Chat
                 message=f"v2 hybrid retrieval candidates: {files}",
             )
         )
+    memory_trace = []
+    if response.memory_hits:
+        summaries = ", ".join(_memory_summary(hit) for hit in response.memory_hits[:3])
+        memory_trace.append(
+            TraceResponseItem(
+                type="memory",
+                message=f"recalled {len(response.memory_hits)} memories: {summaries}",
+            )
+        )
     return ChatResponse(
         answer=response.answer,
         tool_calls=[_tool_call_item(call) for call in response.tool_calls],
@@ -192,11 +214,13 @@ def chat_response(response: AgentResponse, evidence: list[EvidenceItem]) -> Chat
             for item in evidence
         ],
         trace=retrieval_trace
+        + memory_trace
         + [
             TraceResponseItem(type="tool_call", message=f'readFile("{call.fname}")')
             for call in response.tool_calls
         ]
         + [TraceResponseItem(type="answer", message="final answer returned")],
+        memory_hits=[_memory_hit_item(hit) for hit in response.memory_hits],
     )
 
 
@@ -207,6 +231,23 @@ def _tool_call_item(call: ToolCall) -> ToolCallItem:
         fname=call.fname,
         result_preview=call.result_preview,
     )
+
+
+def _memory_hit_item(hit: MemorySearchHit) -> MemoryHitItem:
+    """Convert a recalled memory into API schema."""
+    return MemoryHitItem(
+        id=hit.record.id,
+        layer=hit.record.layer,
+        kind=hit.record.kind,
+        summary=_memory_summary(hit),
+        score=hit.score,
+        reason=hit.reason,
+    )
+
+
+def _memory_summary(hit: MemorySearchHit) -> str:
+    """Return a compact memory summary."""
+    return _compact_text(hit.record.summary or hit.record.content, MAX_EVIDENCE_TEXT_CHARS)
 
 
 def _compact_text(value: str, limit: int) -> str:
