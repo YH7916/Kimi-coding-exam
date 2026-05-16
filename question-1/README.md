@@ -134,13 +134,13 @@ Agent 约束：
 ### Phase 4
 
 ```text
-POST /v3/chat
+POST /v3/chat 或 /v3/chat/stream
 { "message": "记住：支付服务负责人是小王，升级群是 #pay-oncall。" }
-→ 200 { "memory_hits": [], ... }
+→ 200 / SSE done；完成后写入 L0 raw event 并抽取 L1 atomic memory
 
-POST /v3/chat
+POST /v3/chat 或 /v3/chat/stream
 { "message": "支付服务报警应该找谁？" }
-→ 200 { "memory_hits": [{ "summary": "支付服务负责人是小王..." }], ... }
+→ 200 / SSE memory event；返回 memory_hits，例如 { "summary": "支付服务负责人是小王..." }
 
 GET /v3/memory
 GET /v3/memory/search?q=支付服务
