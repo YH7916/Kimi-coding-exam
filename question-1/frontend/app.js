@@ -79,6 +79,7 @@ function serializeChatTurns() {
       evidence: turn.evidence || [],
       trace: turn.trace || [],
       toolCalls: turn.toolCalls || [],
+      memoryHits: turn.memoryHits || [],
       streaming: false,
     }));
 }
@@ -120,6 +121,7 @@ function restoreChatTurns(turns) {
         evidence: turn.evidence || [],
         trace: turn.trace || [],
         toolCalls: turn.toolCalls || [],
+        memoryHits: turn.memoryHits || [],
         streaming: false,
       })),
   );
@@ -503,6 +505,7 @@ async function submitChat(message) {
     evidence: [],
     trace: [],
     toolCalls: [],
+    memoryHits: [],
     streaming: true,
   };
   chatTurns.push(assistantTurn);
@@ -564,6 +567,19 @@ function applyChatStreamEvent(turn, event) {
     ];
     return "full";
   }
+  if (event.type === "memory") {
+    turn.memoryHits = data.items || [];
+    turn.trace = [
+      ...(turn.trace || []),
+      {
+        type: "memory",
+        message: turn.memoryHits.length
+          ? `recalled ${turn.memoryHits.length} memories`
+          : "no memory context",
+      },
+    ];
+    return "full";
+  }
   if (event.type === "observation") {
     turn.trace = [
       ...(turn.trace || []),
@@ -589,6 +605,7 @@ function applyChatStreamEvent(turn, event) {
     turn.evidence = data.evidence || turn.evidence || [];
     turn.trace = mergeTraceEvents(turn.trace || [], data.trace || []);
     turn.toolCalls = data.tool_calls || turn.toolCalls || [];
+    turn.memoryHits = data.memory_hits || turn.memoryHits || [];
     return "full";
   }
   if (event.type === "warning") {
@@ -637,13 +654,17 @@ function hasPartialAgentState(turn) {
     turn.content
       || (turn.evidence || []).length
       || (turn.trace || []).length
-      || (turn.toolCalls || []).length,
+      || (turn.toolCalls || []).length
+      || (turn.memoryHits || []).length,
   );
 }
 
 function streamingPlaceholder(turn) {
   if ((turn.evidence || []).length) {
     return "已读取 SOP 证据，正在生成回答...";
+  }
+  if ((turn.memoryHits || []).length) {
+    return "已召回相关记忆，正在检索 SOP...";
   }
   if ((turn.toolCalls || []).length) {
     return "正在读取相关 SOP...";
