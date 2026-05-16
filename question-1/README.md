@@ -8,8 +8,8 @@
 | ---- | ---- | ---- |
 | Phase 1 | `/v1`、`/v1/search`、`/v1/documents` | 解析 HTML 可见文本，使用 BM25/关键词检索，忽略 `script` 等不可见内容 |
 | Phase 2 | `/v2`、`/v2/search` | SOP section chunking + embedding vector store + BM25/RRF hybrid retrieval；无密钥时自动使用离线 semantic fallback |
-| Phase 3 | `/v3`、`/v3/chat` | OpenAI-compatible Chat Completions tool-calling Agent，只通过 `readFile(fname)` 读取 SOP，并在前端展示工具调用、证据和引用 |
-| Phase 4 | `/v3/memory`、`/v3/memory/search` | L0-L3 layered memory，支持原始事件、原子记忆、召回、删除和离线 memory recall 评测 |
+| Phase 3 | `/v3`、`/v3/chat`、`/v3/chat/stream` | OpenAI-compatible Chat Completions tool-calling Agent，只通过 `readFile(fname)` 读取 SOP，并在前端展示流式工具调用、证据和引用 |
+| Phase 4 | `/v3/memory`、`/v3/memory/search` | L0-L3 layered memory，支持流式/非流式写入、L1 原子事实、L2 事故场景、L3 偏好画像、冲突覆盖、过期隐藏、删除和离线 memory eval |
 
 前端是纯静态页面，由 FastAPI 托管，三个阶段共享同一个产品化界面，可以在顶部切换 `v1 Search`、`v2 RAG` 和 `v3 Agent`。
 
@@ -72,8 +72,8 @@ npm run lint:frontend
 
 本地最近一次验证结果：
 
-- `python scripts/evaluate.py`：v1 hit@5 = 1.00，v2 hit@3 = 1.00，v3 tool files = 1.00，v3 keywords = 1.00，memory recall@1 = 1.00。
-- `python -m unittest`：96 个测试通过，2 个真实 provider 测试默认跳过。
+- `python scripts/evaluate.py`：24 cases；v1 hit@5 = 1.00，v2 hit@3 = 1.00，v3 tool files = 1.00，v3 evidence = 1.00，v3 keywords = 1.00，memory recall@1 = 1.00，memory rejection = 1.00，memory conflict = 1.00。
+- `python -m unittest`：104 个测试通过，2 个真实 provider 测试默认跳过。
 - `npm run lint:frontend`：通过。
 
 ## API 说明
@@ -134,13 +134,13 @@ Agent 约束：
 ### Phase 4
 
 ```text
-POST /v3/chat
+POST /v3/chat 或 /v3/chat/stream
 { "message": "记住：支付服务负责人是小王，升级群是 #pay-oncall。" }
-→ 200 { "memory_hits": [], ... }
+→ 200 / SSE done；完成后写入 L0 raw event 并抽取 L1 atomic memory
 
-POST /v3/chat
+POST /v3/chat 或 /v3/chat/stream
 { "message": "支付服务报警应该找谁？" }
-→ 200 { "memory_hits": [{ "summary": "支付服务负责人是小王..." }], ... }
+→ 200 / SSE memory event；返回 memory_hits，例如 { "summary": "支付服务负责人是小王..." }
 
 GET /v3/memory
 GET /v3/memory/search?q=支付服务
@@ -150,10 +150,13 @@ DELETE /v3/memory/{memory_id}
 记忆边界：
 
 - L0 raw events：每轮完成的用户消息、答案、tool calls、evidence 和 trace，用于 provenance。
-- L1 atomic memories：显式“记住”类事实、偏好、服务上下文；第一版只做保守确定性抽取。
-- L2 scene memories：预留给事故场景摘要，后续可由 L0/L1 聚合。
-- L3 profile：预留给稳定用户/团队画像，召回时和 L1/L2 一起格式化为非 SOP 上下文。
+- L1 atomic memories：显式“记住”类事实、服务负责人、升级群等结构化服务上下文；同一 dedupe key 的新事实会覆盖旧事实并保留来源链。
+- L2 scene memories：从包含 tool/evidence 的完成交互中抽取事故场景摘要，用于追溯“上次类似事故怎么处理”。
+- L3 profile：从稳定回答偏好中抽取长期画像，召回时优先作为非 SOP 上下文注入。
+- `expires_at`、soft delete 和 active filter 支持过期隐藏与手动删除。
 - Memory context 不是 SOP 证据；事故处理动作仍以 RAG 候选和 `readFile` 读取到的 SOP 为准。
+
+评测方法参考 Anthropic 的 Agent eval 思路：优先使用可重复的确定性 grader，同时检查 outcome、tool trace 和 evidence，而不是只看最终自然语言答案。
 
 ## 真实模型配置
 

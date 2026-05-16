@@ -454,9 +454,30 @@ def _chat_event_stream(
     """Serialize Agent stream events into SSE frames."""
     try:
         for event in runtime.chat_events(message, history=history):
+            if event.type == "done":
+                warning = _record_streamed_interaction(message, retrieval_query, event)
+                if warning:
+                    yield _sse("warning", {"message": warning})
             yield _sse(event.type, _stream_payload(event, retrieval_query))
     except Exception as exc:  # pylint: disable=broad-exception-caught
         yield _sse("error", {"message": str(exc)})
+
+
+def _record_streamed_interaction(
+    message: str,
+    retrieval_query: str,
+    event: AgentStreamEvent,
+) -> str | None:
+    """Persist a completed streaming chat turn once the final response exists."""
+    response = event.payload.get("response")
+    if not isinstance(response, AgentResponse):
+        return None
+    try:
+        evidence = _evidence_for_tool_calls(retrieval_query, response.tool_calls)
+        runtime.record_interaction(message, response, evidence)
+    except Exception:  # pylint: disable=broad-exception-caught
+        return "memory write failed; answer still returned"
+    return None
 
 
 def _stream_payload(event: AgentStreamEvent, retrieval_query: str) -> dict[str, object]:

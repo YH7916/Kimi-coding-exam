@@ -79,6 +79,7 @@ class MemoryStore:
     def upsert_memory(self, record: MemoryRecord) -> MemoryRecord:
         """Insert or replace a durable memory record."""
         now = utc_now()
+        record = self._resolve_dedupe_conflict(record)
         existing = self._get_memory_row(record.id, include_inactive=True)
         created_at = existing["created_at"] if existing is not None else record.created_at
         stored = replace(
@@ -137,6 +138,8 @@ class MemoryStore:
             params.append(layer)
         if not include_inactive:
             conditions.append("deleted_at IS NULL")
+            conditions.append("(expires_at IS NULL OR expires_at > ?)")
+            params.append(utc_now())
         where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         params.append(limit)
         with closing(sqlite3.connect(self.path)) as connection:
@@ -175,8 +178,11 @@ class MemoryStore:
         include_inactive: bool = False,
     ) -> sqlite3.Row | None:
         conditions = ["id = ?"]
+        params: list[object] = [memory_id]
         if not include_inactive:
             conditions.append("deleted_at IS NULL")
+            conditions.append("(expires_at IS NULL OR expires_at > ?)")
+            params.append(utc_now())
         with closing(sqlite3.connect(self.path)) as connection:
             connection.row_factory = sqlite3.Row
             row = connection.execute(
@@ -185,9 +191,40 @@ class MemoryStore:
                 FROM memories
                 WHERE {' AND '.join(conditions)}
                 """,
-                (memory_id,),
+                params,
             ).fetchone()
         return cast(sqlite3.Row | None, row)
+
+    def _resolve_dedupe_conflict(self, record: MemoryRecord) -> MemoryRecord:
+        dedupe_key = _dedupe_key(record)
+        if not dedupe_key:
+            return record
+        existing = self._active_memory_with_dedupe_key(record.layer, dedupe_key)
+        if existing is None or existing.id == record.id:
+            return record
+        if existing.content == record.content and existing.kind == record.kind:
+            return _merge_duplicate(existing, record)
+        self.delete_memory(existing.id)
+        metadata = {
+            **record.metadata,
+            "supersedes_memory_id": existing.id,
+            "conflict_resolution": "newer_same_dedupe_key",
+        }
+        return replace(
+            record,
+            source_memory_ids=_merge_strings([existing.id, *existing.source_memory_ids, *record.source_memory_ids]),
+            metadata=metadata,
+        )
+
+    def _active_memory_with_dedupe_key(
+        self,
+        layer: str,
+        dedupe_key: str,
+    ) -> MemoryRecord | None:
+        for record in self.list_memories(layer=layer, limit=1000):
+            if _dedupe_key(record) == dedupe_key:
+                return record
+        return None
 
     def _ensure_schema(self) -> None:
         """Create memory tables."""
@@ -326,6 +363,32 @@ def _json_dict(value: object) -> dict[str, object]:
     if not isinstance(loaded, dict):
         return {}
     return dict(_json_items(loaded.items()))
+
+
+def _dedupe_key(record: MemoryRecord) -> str:
+    key = record.metadata.get("dedupe_key")
+    return str(key) if key else ""
+
+
+def _merge_duplicate(existing: MemoryRecord, record: MemoryRecord) -> MemoryRecord:
+    return replace(
+        record,
+        id=existing.id,
+        tags=_merge_strings([*existing.tags, *record.tags]),
+        source_event_ids=_merge_strings([*existing.source_event_ids, *record.source_event_ids]),
+        source_memory_ids=_merge_strings([*existing.source_memory_ids, *record.source_memory_ids]),
+        metadata={**existing.metadata, **record.metadata},
+        created_at=existing.created_at,
+    )
+
+
+def _merge_strings(values: Iterable[str]) -> list[str]:
+    result = []
+    for value in values:
+        text = str(value)
+        if text and text not in result:
+            result.append(text)
+    return result
 
 
 def _json_items(items: Iterable[tuple[object, object]]) -> Iterable[tuple[str, object]]:

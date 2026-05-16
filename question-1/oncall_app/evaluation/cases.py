@@ -1,16 +1,69 @@
 """Evaluation case definitions for README behavior."""
 
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal
 
 EvalPhase = Literal["v1", "v2", "v3"]
 
-MEMORY_CASES = [
+MEMORY_CASES: list[dict[str, Any]] = [
     {
         "write": "记住：支付服务负责人是小王，升级群是 #pay-oncall。",
         "recall": "支付服务报警应该找谁？",
-        "expected_memory": "支付服务负责人",
+        "expected_memory": "支付服务负责人：小王",
+        "expected_layer": "L1",
+        "mode": "search",
+    },
+    {
+        "write": "记住：支付服务负责人是小周，升级群是 #pay-next。",
+        "recall": "支付服务现在负责人是谁？",
+        "expected_memory": "支付服务负责人：小周",
+        "expected_layer": "L1",
+        "mode": "search",
+    },
+    {
+        "write": "记住：推荐服务负责人是小李。",
+        "recall": "推荐服务报警找谁？",
+        "expected_memory": "推荐服务负责人：小李",
+        "expected_layer": "L1",
+        "mode": "search",
+    },
+    {
+        "write": "记住：推荐服务升级群是 #rec-oncall。",
+        "recall": "推荐服务升级群在哪里？",
+        "expected_memory": "推荐服务升级群：#rec-oncall",
+        "expected_layer": "L1",
+        "mode": "search",
+    },
+    {
+        "write": "以后回答请用中文，尽量短一点，这是我的偏好。",
+        "recall": "",
+        "expected_memory": "回答偏好：中文、简洁",
+        "expected_layer": "L3",
+        "mode": "profile",
+    },
+    {
+        "write": "服务 OOM 了怎么办？",
+        "answer": "先保存堆转储，再按 SOP 升级。",
+        "tool_calls": [{"tool": "readFile", "fname": "sop-001.html"}],
+        "evidence": [{"file": "sop-001.html", "section": "场景二：单服务OOM崩溃"}],
+        "recall": "上次 OOM 怎么处理的？",
+        "expected_memory": "事故场景",
+        "expected_layer": "L2",
+        "mode": "search",
+    },
+    {
+        "write": "记住：发布窗口是每周三下午。",
+        "recall": "发布窗口是什么时候？",
+        "expected_memory": "发布窗口",
+        "expected_layer": "L1",
+        "mode": "search",
     }
+]
+
+MEMORY_REJECTION_CASES: list[dict[str, Any]] = [
+    {"write": "支付服务报警应该找谁？"},
+    {"write": "服务 OOM 了怎么办？"},
+    {"write": "这个页面为什么打不开？"},
 ]
 
 
