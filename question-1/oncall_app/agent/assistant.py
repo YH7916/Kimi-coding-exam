@@ -18,11 +18,20 @@ from oncall_app.documents.repository import DocumentRepository
 from oncall_app.llm.chat_client import ChatClient
 from oncall_app.llm.openai_compat import JsonObject
 from oncall_app.memory.models import MemorySearchHit
-from oncall_app.models import AgentResponse, AgentStreamEvent, ConversationTurn, SearchResult
+from oncall_app.models import (
+    AgentResponse,
+    AgentStreamEvent,
+    ConversationTurn,
+    SearchResult,
+    ToolCall,
+)
 
 MAX_TOOL_ROUNDS = 4
 MAX_HISTORY_MESSAGES = 8
 ANSWER_CHUNK_SIZE = 18
+INVALID_TOOL_FNAME = "<invalid>"
+TOOL_ERROR_PREFIX = "工具调用失败"
+TOOL_ERROR_PREVIEW_LIMIT = 240
 
 
 class OnCallAssistant:  # pylint: disable=too-few-public-methods
@@ -82,7 +91,7 @@ class OnCallAssistant:  # pylint: disable=too-few-public-methods
                 )
             round_observations: list[ToolObservation] = []
             for tool_call in requested_tools:
-                observation = self._execute_tool_call(tool_call)
+                observation = self._execute_tool_call_safely(tool_call)
                 round_observations.append(observation)
                 tool_calls.append(observation.call)
                 messages.append(_tool_message(tool_call, observation.content))
@@ -162,14 +171,25 @@ class OnCallAssistant:  # pylint: disable=too-few-public-methods
 
             round_observations: list[ToolObservation] = []
             for tool_call in requested_tools:
+                visible_call = _visible_tool_call(tool_call)
                 yield AgentStreamEvent(
                     type="tool_call",
-                    payload={"tool": "readFile", "fname": _tool_file_name(tool_call)},
+                    payload={"tool": visible_call.tool, "fname": visible_call.fname},
                 )
-                observation = self._execute_tool_call(tool_call)
+                observation = self._execute_tool_call_safely(tool_call)
                 round_observations.append(observation)
                 tool_calls.append(observation.call)
                 messages.append(_tool_message(tool_call, observation.content))
+                if _is_tool_error_observation(observation):
+                    yield AgentStreamEvent(
+                        type="tool_error",
+                        payload={
+                            "tool": observation.call.tool,
+                            "fname": observation.call.fname,
+                            "message": observation.content,
+                        },
+                    )
+                    continue
                 yield AgentStreamEvent(
                     type="observation",
                     payload={
@@ -210,7 +230,7 @@ class OnCallAssistant:  # pylint: disable=too-few-public-methods
         messages.append({"role": "user", "content": message})
         return messages
 
-    def _execute_tool_call(self, tool_call: JsonObject):
+    def _execute_tool_call(self, tool_call: JsonObject) -> ToolObservation:
         """Execute one model-requested tool call."""
         function = _function_payload(tool_call)
         name = str(function.get("name", ""))
@@ -218,6 +238,13 @@ class OnCallAssistant:  # pylint: disable=too-few-public-methods
             raise ValueError(f"unsupported tool: {name}")
         fname = _tool_file_name(tool_call)
         return self.read_file_tool.read_file(fname)
+
+    def _execute_tool_call_safely(self, tool_call: JsonObject) -> ToolObservation:
+        """Execute one tool call, converting malformed calls into observations."""
+        try:
+            return self._execute_tool_call(tool_call)
+        except (ValueError, FileNotFoundError) as exc:
+            return _tool_error_observation(tool_call, exc)
 
     @staticmethod
     def _extract_evidence(
@@ -233,6 +260,7 @@ class OnCallAssistant:  # pylint: disable=too-few-public-methods
             )
             for observation in observations
             if observation.call.fname.endswith(".html")
+            and not _is_tool_error_observation(observation)
         ]
         if not documents:
             return []
@@ -274,8 +302,72 @@ def _function_payload(tool_call: JsonObject) -> JsonObject:
 def _tool_file_name(tool_call: JsonObject) -> str:
     """Extract the fname argument from a readFile tool call."""
     function = _function_payload(tool_call)
-    arguments = json.loads(str(function.get("arguments") or "{}"))
-    return str(arguments.get("fname", ""))
+    raw_arguments = function.get("arguments") or "{}"
+    arguments = raw_arguments if isinstance(raw_arguments, dict) else json.loads(str(raw_arguments))
+    if not isinstance(arguments, dict):
+        raise ValueError("tool arguments must be a JSON object")
+    fname = arguments.get("fname")
+    if not isinstance(fname, str) or not fname.strip():
+        raise ValueError("readFile requires a non-empty fname string")
+    return fname.strip()
+
+
+def _visible_tool_call(tool_call: JsonObject) -> ToolCall:
+    """Return safe user-visible tool metadata without raising."""
+    return ToolCall(
+        tool=_safe_tool_name(tool_call),
+        fname=_safe_tool_file_name(tool_call),
+        result_preview="",
+    )
+
+
+def _safe_tool_name(tool_call: JsonObject) -> str:
+    """Return the requested tool name, or a safe placeholder."""
+    function = tool_call.get("function")
+    if isinstance(function, dict):
+        name = function.get("name")
+        if isinstance(name, str) and name:
+            return name
+    return "unknown"
+
+
+def _safe_tool_file_name(tool_call: JsonObject) -> str:
+    """Return the requested file name, or a safe placeholder."""
+    try:
+        return _tool_file_name(tool_call)
+    except (ValueError, FileNotFoundError):
+        return INVALID_TOOL_FNAME
+
+
+def _tool_error_observation(tool_call: JsonObject, exc: Exception) -> ToolObservation:
+    """Return a bounded tool-error observation for the model and UI trace."""
+    visible_call = _visible_tool_call(tool_call)
+    message = f"{TOOL_ERROR_PREFIX}：{_safe_tool_error_reason(exc)}"
+    return ToolObservation(
+        content=message,
+        call=ToolCall(
+            tool=visible_call.tool,
+            fname=visible_call.fname,
+            result_preview=message[:TOOL_ERROR_PREVIEW_LIMIT],
+        ),
+    )
+
+
+def _safe_tool_error_reason(exc: Exception) -> str:
+    """Return a non-sensitive tool error reason."""
+    if isinstance(exc, FileNotFoundError):
+        return "请求的 SOP 文件不存在。"
+    reason = str(exc)
+    if "unsupported tool" in reason:
+        return "只支持 readFile 工具。"
+    if "direct file name" in reason:
+        return "readFile 只接受 data 目录下的直接文件名。"
+    return "readFile 参数格式无效，已将错误反馈给模型重试。"
+
+
+def _is_tool_error_observation(observation: ToolObservation) -> bool:
+    """Return whether an observation represents a failed tool call."""
+    return observation.content.startswith(TOOL_ERROR_PREFIX)
 
 
 def _tool_message(tool_call: JsonObject, content: str) -> JsonObject:

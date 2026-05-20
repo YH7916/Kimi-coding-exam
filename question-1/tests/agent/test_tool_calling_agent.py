@@ -95,6 +95,58 @@ class TimeoutAfterToolChatClient(FakeChatClient):
         raise TimeoutError("timed out")
 
 
+class BadToolArgumentsChatClient(FakeChatClient):
+    """Fake client that returns malformed tool arguments before recovering."""
+
+    def create_chat_completion(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Return one malformed tool call, then a final answer."""
+        self.calls.append({"messages": messages, "tools": tools})
+        if len(self.calls) == 1:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": "call_bad",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "readFile",
+                                        "arguments": "{not-json",
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                ]
+            }
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "工具参数错误已被记录，没有中断对话。",
+                    }
+                }
+            ]
+        }
+
+    def stream_chat_completion(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+    ):
+        """Yield a final answer after receiving the tool error."""
+        self.stream_calls.append({"messages": messages, "tools": tools})
+        yield "工具参数错误已被记录。"
+
+
 class ToolCallingAgentTest(unittest.TestCase):
     """Agent uses Chat Completions tool calls."""
 
@@ -173,6 +225,36 @@ class ToolCallingAgentTest(unittest.TestCase):
         self.assertLess(history_user_index, history_assistant_index)
         self.assertLess(history_assistant_index, current_user_index)
 
+    def test_bad_tool_arguments_return_tool_error_observation(self):
+        """Malformed provider tool arguments become visible tool errors."""
+        chat_client = BadToolArgumentsChatClient()
+        assistant = OnCallAssistant(
+            repository=DocumentRepository(DATA_DIR),
+            chat_client=chat_client,
+        )
+
+        response = assistant.chat(
+            "服务 OOM 了怎么办？",
+            retrieval_candidates=[
+                SearchResult(
+                    doc_id="sop-001",
+                    title="后端服务 On-Call SOP",
+                    snippet="单服务 OOM 崩溃",
+                    score=1.0,
+                )
+            ],
+        )
+
+        tool_messages = [
+            message
+            for message in chat_client.calls[1]["messages"]
+            if message.get("role") == "tool"
+        ]
+        self.assertEqual(response.tool_calls[0].fname, "<invalid>")
+        self.assertIn("工具调用失败", response.tool_calls[0].result_preview)
+        self.assertIn("工具调用失败", tool_messages[0]["content"])
+        self.assertIn("工具参数错误", response.answer)
+
     def test_stream_chat_uses_provider_stream_for_final_answer(self):
         """After reading SOPs, v3 streams answer deltas from the provider."""
         chat_client = FakeChatClient()
@@ -239,6 +321,39 @@ class ToolCallingAgentTest(unittest.TestCase):
         self.assertEqual(event_types[-1], "done")
         self.assertIn("sop-001.html", answer)
         self.assertIn("兜底回答", answer)
+
+    def test_stream_chat_emits_tool_error_for_bad_arguments(self):
+        """Streaming exposes malformed tool arguments as a tool_error event."""
+        chat_client = BadToolArgumentsChatClient()
+        assistant = OnCallAssistant(
+            repository=DocumentRepository(DATA_DIR),
+            chat_client=chat_client,
+        )
+
+        events = list(
+            assistant.stream_chat(
+                "服务 OOM 了怎么办？",
+                retrieval_candidates=[
+                    SearchResult(
+                        doc_id="sop-001",
+                        title="后端服务 On-Call SOP",
+                        snippet="单服务 OOM 崩溃",
+                        score=1.0,
+                    )
+                ],
+            )
+        )
+        error_events = [event for event in events if event.type == "tool_error"]
+        answer = "".join(
+            str(event.payload.get("delta") or "")
+            for event in events
+            if event.type == "answer_delta"
+        )
+
+        self.assertTrue(error_events)
+        self.assertEqual(error_events[0].payload["fname"], "<invalid>")
+        self.assertIn("工具调用失败", str(error_events[0].payload["message"]))
+        self.assertIn("工具参数错误", answer)
 
 
 if __name__ == "__main__":

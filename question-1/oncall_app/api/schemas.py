@@ -10,6 +10,8 @@ from oncall_app.models import AgentResponse, Document, SearchResult, ToolCall
 
 MAX_EVIDENCE_HEADING_CHARS = 80
 MAX_EVIDENCE_TEXT_CHARS = 240
+MAX_CHAT_MESSAGE_CHARS = 2000
+MAX_CHAT_HISTORY_CONTENT_CHARS = 2000
 
 
 class SearchResultItem(BaseModel):
@@ -93,13 +95,13 @@ class ChatHistoryItem(BaseModel):
     """One previous visible chat turn supplied by the frontend."""
 
     role: Literal["user", "assistant"]
-    content: str = Field(min_length=1)
+    content: str = Field(min_length=1, max_length=MAX_CHAT_HISTORY_CONTENT_CHARS)
 
 
 class ChatRequest(BaseModel):
     """Request body for v3 chat."""
 
-    message: str = Field(min_length=1)
+    message: str = Field(min_length=1, max_length=MAX_CHAT_MESSAGE_CHARS)
     history: list[ChatHistoryItem] = Field(default_factory=list, max_length=12)
 
 

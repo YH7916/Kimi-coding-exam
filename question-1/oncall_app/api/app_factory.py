@@ -3,8 +3,9 @@
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from oncall_app.api.router import reset_runtime, router
+from oncall_app.api.router import router
 from oncall_app.api.static_files import FRONTEND_DIR
+from oncall_app.runtime import reset_runtime
 
 
 def create_app(test_mode: bool = False) -> FastAPI:

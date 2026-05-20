@@ -10,6 +10,28 @@ from oncall_app.api.app_factory import create_app
 class AgentRouteTest(unittest.TestCase):
     """v3 chat API returns answer, tool calls, evidence, and trace."""
 
+    def test_v3_chat_rejects_oversized_message(self):
+        """Chat requests reject messages that would blow up model context."""
+        client = TestClient(create_app(test_mode=True))
+
+        response = client.post("/v3/chat", json={"message": "x" * 2001})
+
+        self.assertEqual(response.status_code, 422)
+
+    def test_v3_chat_rejects_oversized_history_content(self):
+        """Chat requests reject oversized history turns before retrieval."""
+        client = TestClient(create_app(test_mode=True))
+
+        response = client.post(
+            "/v3/chat",
+            json={
+                "message": "服务 OOM 了怎么办？",
+                "history": [{"role": "user", "content": "x" * 2001}],
+            },
+        )
+
+        self.assertEqual(response.status_code, 422)
+
     def test_v3_chat_oom(self):
         """OOM chat returns an answer with visible tool trace."""
         client = TestClient(create_app(test_mode=True))

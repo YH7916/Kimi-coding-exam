@@ -5,7 +5,7 @@ import unittest
 from fastapi.testclient import TestClient
 
 from oncall_app.api.app_factory import create_app
-from oncall_app.api.router import DATA_DIR, SearchRuntime
+from oncall_app.runtime import DATA_DIR, SearchRuntime
 
 
 class FakeEmbeddingClient:  # pylint: disable=too-few-public-methods
